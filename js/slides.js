@@ -9,6 +9,7 @@ import { PRO_EVENTS } from './pro-events.js';
 import { PRO_SCORE } from './pro-score.js';
 import { PRO_BARS } from './pro-bars.js';
 import { BIRDS } from './birds.js';
+const CELLO = PRO_SCORE.cello.map((s) => [s]);   // the cello's notes in the recording, for the clock
 
 // the events of a list ([time, ...] sorted by time) in (a, b]
 const between = (list, a, b) => {
@@ -624,6 +625,7 @@ export const SLIDES = {
         ev.hits.forEach(([, s]) => mon.hit('beat', s, 0, t));
         ev.clicks.forEach(([, s]) => mon.hit('click', s, 0, t));
         ev.notes.forEach(([, s, m]) => mon.hit('note', s, m, t));
+        if (fresh) between(CELLO, last, pos).forEach(() => mon.hit('pluck', 0, 0, t));
       };
       // the monument hall: a clock, busts and gas masks (scans), all on the beat
       S.state.mon = S.add(new Monument(S.q('#cv-monument'), {

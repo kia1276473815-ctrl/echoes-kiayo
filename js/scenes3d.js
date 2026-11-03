@@ -925,10 +925,11 @@ class Collage {
     // Prokofiev, life size, the one real person in the hall: he looks at you the whole time
     this.pro = this.cut('prokofiev', 2.0);
     this.pro.position.set(1.25, F, -5.6);
-    // his obituary on page 116, coming down through the hall like a leaf
+    // his obituary on page 116, coming down through the hall like a leaf, to the right of the clock (where it cannot
+    // pass in front of the title)
     this.obit = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.86), new THREE.MeshLambertMaterial({ map: this.paper(), side: THREE.DoubleSide }));
     this.add(this.obit);
-    this.obitS = { x: -2.2, y: 3.4, z: -2, r: 0 };
+    this.obitS = { x: 0.75, y: 3.4, z: -2, r: 0 };
     // Lissitzky's wedge comes in from the bottom left corner, right across the page, and drives into the red disc
     // behind the clock, as in the poster. Its point is the group's origin.
     this.wedge = new THREE.Group();
@@ -1055,7 +1056,7 @@ class Collage {
     if (P[0] === 's') {
       this.turnT = undefined; this.workerFall = undefined;
       if (prev && prev[0] === 's') this.wedgeIn = 1;     // every new part drives the wedge in again
-      if (P === 's0') { this.obitS = { x: -2.2, y: 3.4, z: -2, r: 0 }; this.earsS = { x: -2.5, z: -10.5, step: 0 }; this.drumS = { x: 4.5 }; this.stickers.forEach((m) => (m.userData.slot = null)); }
+      if (P === 's0') { this.obitS = { x: 0.75, y: 3.4, z: -2, r: 0 }; this.earsS = { x: -2.5, z: -10.5, step: 0 }; this.drumS = { x: 4.5 }; this.stickers.forEach((m) => (m.userData.slot = null)); }
     }
   }
   draw(st, A, t, dt, pt) {
@@ -1084,8 +1085,8 @@ class Collage {
     if (ob.visible && !this.paperDone) { const im = this.tex['prokofiev-obit'].image; if (im && im.width) { this.drawPaper(im); this.paperTex.needsUpdate = true; this.paperDone = true; } }
     if (ob.visible && !still) {
       os.y -= dt * 0.3; os.r += dt;
-      os.x += Math.sin(t * 0.9) * dt * 0.35;
-      if (os.y < -1.8) { os.y = 3.4; os.x = -2.4 + Math.random() * 1.2; }
+      os.x = Math.max(0.5, Math.min(1.05, os.x + Math.sin(t * 0.9) * dt * 0.35));
+      if (os.y < -1.8) { os.y = 3.4; os.x = 0.55 + Math.random() * 0.4; }
     }
     ob.position.set(os.x, os.y, os.z);
     ob.rotation.set(Math.sin(os.r * 1.3) * 0.9, os.r * 0.7, Math.sin(os.r) * 0.5);
@@ -1310,6 +1311,7 @@ export class Monument extends S3 {
     glass.position.set(0, 0.0915, 0.0565);
     this.clock.add(body, glass);
     this.clock.scale.setScalar(S);
+    this.clockS = S;
     this.clock.position.set(0, this.C.y - 0.0915 * S, -0.0565 * S);
     this.scene.add(this.clock);
     const handMat = (c, e = 0) => new THREE.MeshStandardMaterial({ color: c, metalness: 0.75, roughness: 0.35, emissive: c, emissiveIntensity: e });
@@ -1402,6 +1404,7 @@ export class Monument extends S3 {
       F.note = t; F.noteS = Math.min(1, s / 20);
     }
     if (kind === 'beat') { F.beat = t; F.beatS = Math.min(1, s / 25); }
+    if (kind === 'pluck') { F.pluck = t; F.pluckSide = -(F.pluckSide || 1); }
     this.col.hit(kind, s, t);
   }
   // back before the turn (a seek): the hall empties and starts again
@@ -1540,6 +1543,12 @@ export class Monument extends S3 {
     for (const k of ['s', 'm', 'h']) { H[k] += (tgt[k] - H[k]) * snap; this.hands[k].rotation.z = -(H[k] + Math.PI / 2); }
     this.hands.s.material.emissiveIntensity = P === 'drain' ? 2.5 : 0.6;
     if (P !== 'drain' && P !== 'end') this.clock.rotation.y = Math.sin(t * 0.3) * 0.08;
+    // each note of the cello (pizzicato, mostly) strikes the clock lightly: it swells a little and tips, one way then
+    // the other, and the glow behind its face flares
+    const pk = P[0] === 's' ? Math.exp(-(t - (this.fx.pluck ?? -9)) * 13) : 0;
+    this.clock.scale.setScalar(this.clockS * (1 + 0.04 * pk));
+    this.clock.rotation.z = pk * 0.03 * (this.fx.pluckSide || 1);
+    if (this.km) this.km.emissiveIntensity += pk * 0.18;
   }
   hall(st, A, t, dt) {
     const P = st.phase, sec = P[0] === 's' ? +P.slice(1) : 9;

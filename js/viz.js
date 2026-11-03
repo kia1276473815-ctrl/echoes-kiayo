@@ -687,11 +687,18 @@ export class Stave extends Base {
     sheet.onload = () => { this.ink = this.tint(sheet, [239, 236, 230]); this.red = this.tint(sheet, [229, 72, 47]); };
     sheet.src = o.sheet;
     const sp = new Image();
+    // the spectrogram drawn like the score: paper-coloured ink on the dark band (its brightness is the ink), the
+    // loudest parts going red
     sp.onload = () => {
       const c = document.createElement('canvas'); c.width = sp.naturalWidth; c.height = sp.naturalHeight;
       const x = c.getContext('2d');
       x.drawImage(sp, 0, 0);
-      x.globalCompositeOperation = 'multiply'; x.fillStyle = 'rgb(239,140,120)'; x.fillRect(0, 0, c.width, c.height);
+      const d = x.getImageData(0, 0, c.width, c.height), p = d.data;
+      for (let i = 0; i < p.length; i += 4) {
+        const v = p[i] / 255, hot = Math.max(0, (v - 0.72) / 0.28);
+        p[i] = 239 - hot * 10; p[i + 1] = 236 - hot * 164; p[i + 2] = 230 - hot * 183; p[i + 3] = Math.round(255 * Math.pow(v, 1.4));
+      }
+      x.putImageData(d, 0, 0);
       this.spec = c;
     };
     sp.src = o.spectrum;
@@ -770,11 +777,15 @@ export class Stave extends Base {
     }
     // the strip
     const PX = 1400, H = this.L.h, Y = 1076 - H, u0 = this.at(pos), X = (s) => PX + this.at(s) - u0, XU = (u) => PX + u - u0;
+    // the strip lies on its own dark band, so nothing of the hall shows through the score; a short fade above it and
+    // a fine rule along its top edge
     if (!this.shade) {
-      this.shade = g.createLinearGradient(0, Y - 40, 0, 1080);
-      this.shade.addColorStop(0, 'rgba(0,0,0,0)'); this.shade.addColorStop(0.25, 'rgba(0,0,0,.62)'); this.shade.addColorStop(1, 'rgba(0,0,0,.78)');
+      this.shade = g.createLinearGradient(0, Y - 70, 0, Y - 16);
+      this.shade.addColorStop(0, 'rgba(6,6,6,0)'); this.shade.addColorStop(1, 'rgba(6,6,6,.94)');
     }
-    g.fillStyle = this.shade; g.fillRect(0, Y - 40, 1920, 1080 - Y + 40);
+    g.fillStyle = this.shade; g.fillRect(0, Y - 70, 1920, 54);
+    g.fillStyle = 'rgba(6,6,6,.94)'; g.fillRect(0, Y - 16, 1920, 1080 - Y + 16);
+    g.fillStyle = 'rgba(239,236,230,.22)'; g.fillRect(0, Y - 16, 1920, 1);
     // the electronics: the spectrogram, with soft ends
     if (this.spec) {
       const im = this.spec, fps = im.width / 218.45;
@@ -785,9 +796,9 @@ export class Stave extends Base {
         // in the electronics the strip moves at an even speed: screen x back to the song's time is a straight line
         const ta = a + ((xa - Xa) / (Xb - Xa)) * (b - a), tb = a + ((xb - Xa) / (Xb - Xa)) * (b - a);
         g.save();
-        g.globalAlpha = this.a * 0.85;
+        g.globalAlpha = this.a * 0.9;
         g.drawImage(im, ta * fps, 0, Math.max(1, (tb - ta) * fps), im.height, xa, Y + 6, xb - xa, H - 12);
-        const fade = (x0, dir) => { const gr = g.createLinearGradient(x0, 0, x0 + dir * 50, 0); gr.addColorStop(0, 'rgba(0,0,0,.95)'); gr.addColorStop(1, 'rgba(0,0,0,0)'); g.fillStyle = gr; g.fillRect(dir > 0 ? x0 : x0 - 50, Y, 50, H); };
+        const fade = (x0, dir) => { const gr = g.createLinearGradient(x0, 0, x0 + dir * 50, 0); gr.addColorStop(0, 'rgba(6,6,6,.95)'); gr.addColorStop(1, 'rgba(6,6,6,0)'); g.fillStyle = gr; g.fillRect(dir > 0 ? x0 : x0 - 50, Y, 50, H); };
         g.globalAlpha = this.a;
         if (X(a) > 0) fade(X(a), 1);
         if (X(b) < 1920) fade(X(b), -1);

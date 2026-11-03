@@ -257,17 +257,22 @@ def main():
         last = max(last, t1)
     if END - last > 0.3:
         elec.append([round(last, 2), END])
+    # the cello's notes (pizzicato, mostly) as they sound in the recording, for the clock to answer
+    bars = sc["bars"] + [sc["bars"][-1] + 4]
+    cello = sorted({round(t0 + (n[0] - bars[k]) / beats * (t1 - t0), 3) for k, t0, t1, beats in occ for n in sc["notes"]
+                    if n[3] == 3 and bars[k] <= n[0] < bars[k + 1] and t0 + (n[0] - bars[k]) / beats * (t1 - t0) < END})
     with open(OUT, "w", encoding="utf-8") as fh:
         fh.write("// Made by tools/pro_align.py: where the string quartet's bars sound in the Прокофьев recording.\n")
-        fh.write("// bars: [bar (0-based), from s, to s, beats] (bar 44 on is played twice) · electronic: [from s, to s]\n")
-        fh.write("export const PRO_SCORE = " + json.dumps({"bars": occ, "electronic": elec}, separators=(",", ":")) + ";\n")
+        fh.write("// bars: [bar (0-based), from s, to s, beats] (bar 44 on is played twice) · electronic: [from s, to s] · cello: s\n")
+        fh.write("export const PRO_SCORE = " + json.dumps({"bars": occ, "electronic": elec, "cello": cello}, separators=(",", ":")) + ";\n")
     print("electronic:", elec)
     spectrum()
 
 
 def spectrum():
-    # the spectrogram for the electronic stretches: 40 columns a second, 48 rows on a log scale, 30 Hz-16 kHz
-    rows, fps = 48, 40
+    # the spectrogram for the electronic stretches: 64 columns a second, 96 rows on a log scale, 30 Hz-16 kHz (a webp
+    # stays under 16384 px wide at this rate)
+    rows, fps = 96, 64
     edges = np.geomspace(30, 16000, rows + 1)
     w = wave.open(WAV); sr, ch = w.getframerate(), w.getnchannels()
     x = np.frombuffer(w.readframes(int(END * sr)), np.int16).astype(np.float32).reshape(-1, ch).mean(1) / 32768
@@ -279,7 +284,7 @@ def spectrum():
         m = (fq >= edges[r]) & (fq < edges[r + 1])
         img[rows - 1 - r] = Sp[:, m].max(1) if m.any() else Sp[:, np.argmin(abs(fq - edges[r]))]
     img = 20 * np.log10(img + 1e-6)
-    img = np.clip((img - (img.max() - 60)) / 60, 0, 1)
+    img = np.clip((img - (img.max() - 54)) / 54, 0, 1)
     Image.fromarray((img * 255).astype(np.uint8)).save(IMG, "WEBP", quality=80)
 
 
