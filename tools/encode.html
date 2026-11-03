@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>압축 · 压缩</title>
+<style>
+  body { background: #0E0C0A; color: #EDE4D6; font: 15px/1.6 "Pretendard", "Malgun Gothic", sans-serif; padding: 32px; }
+  #log { white-space: pre-wrap; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<p>음악은 AAC로, 사진은 화면에 쓰는 크기로 줄여서 _build/ 에 저장합니다. 끝나면 "done"이 나옵니다.<br>
+音乐压成 AAC、图片缩到实际显示的尺寸，存进 _build/。出现 "done" 就完成了。</p>
+<div id="log"></div>
+<script type="module">
+// Reads _build/manifest.json (written by `python tools/build.py scan`), compresses every item, and PUTs the
+// result back to tools/build_server.py, which writes it under _build/. Needs Chrome on localhost (WebCodecs).
+const log = (s) => (document.getElementById('log').textContent += s + '\n');
+const put = (path, blob) => fetch('/_build/' + path, { method: 'PUT', body: blob }).then((r) => { if (!r.ok) throw new Error(path + ' ' + r.status); });
+
+// ---- a minimal .m4a writer: one AAC-LC track, every frame in one chunk (ftyp · moov · mdat).
+// Raw ADTS streams decode on desktop Chrome but not on Android, which wants AAC inside an MP4 container.
+const enc8 = (s) => [...s].map((c) => c.charCodeAt(0));
+const u32 = (v) => [(v >>> 24) & 255, (v >>> 16) & 255, (v >>> 8) & 255, v & 255];
+const u16 = (v) => [(v >>> 8) & 255, v & 255];
+const box = (type, ...parts) => { const body = parts.flat(); return [...u32(body.length + 8), ...enc8(type), ...body]; };
+const full = (type, vf, ...parts) => box(type, u32(vf), ...parts);
+const desc = (tag, body) => [tag, 0x80, 0x80, 0x80, body.length, ...body];
+function m4a(frames, asc, sr, ch) {
+  const n = frames.length, dur = n * 1024;
+  const esds = full('esds', 0, desc(0x03, [...u16(1), 0, ...desc(0x04, [0x40, 0x15, 0, 0, 0, ...u32(0), ...u32(0), ...desc(0x05, [...asc])]), ...desc(0x06, [0x02])]));
+  const mp4a = box('mp4a', [0, 0, 0, 0, 0, 0], u16(1), [0, 0, 0, 0, 0, 0, 0, 0], u16(ch), u16(16), u16(0), u16(0), u32(sr * 65536), esds);
+  const matrix = [...u32(0x10000), ...u32(0), ...u32(0), ...u32(0), ...u32(0x10000), ...u32(0), ...u32(0), ...u32(0), ...u32(0x40000000)];
+  const moov = (off) => box('moov',
+    full('mvhd', 0, u32(0), u32(0), u32(sr), u32(dur), u32(0x10000), u16(0x100), Array(10).fill(0), matrix, Array(24).fill(0), u32(2)),
+    box('trak',
+      full('tkhd', 3, u32(0), u32(0), u32(1), u32(0), u32(dur), Array(8).fill(0), u16(0), u16(0), u16(0x100), u16(0), matrix, u32(0), u32(0)),
+      box('mdia',
+        full('mdhd', 0, u32(0), u32(0), u32(sr), u32(dur), u16(0x55c4), u16(0)),
+        full('hdlr', 0, u32(0), enc8('soun'), Array(12).fill(0), enc8('SoundHandler'), [0]),
+        box('minf',
+          full('smhd', 0, u16(0), u16(0)),
+          box('dinf', full('dref', 0, u32(1), full('url ', 1))),
+          box('stbl',
+            full('stsd', 0, u32(1), mp4a),
+            full('stts', 0, u32(1), u32(n), u32(1024)),
+            full('stsc', 0, u32(1), u32(1), u32(n), u32(1)),
+            full('stsz', 0, u32(0), u32(n), frames.flatMap((f) => u32(f.length))),
+            full('stco', 0, u32(1), u32(off)))))));
+  const ftyp = box('ftyp', enc8('M4A '), u32(0), enc8('M4A '), enc8('isom'), enc8('mp42'));
+  const size = moov(0).length, off = ftyp.length + size + 8;
+  const data = frames.reduce((a, f) => a + f.length, 0);
+  return new Blob([new Uint8Array(ftyp), new Uint8Array(moov(off)), new Uint8Array(u32(data + 8)), new Uint8Array(enc8('mdat')), ...frames], { type: 'audio/mp4' });
+}
+
+// ---- a minimal Ogg Opus writer (RFC 7845). Opus is built into every Chromium, including builds and
+// phone browsers that ship without the AAC decoder, so this is what the package uses.
+const le32 = (v) => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
+const le16 = (v) => [v & 255, (v >>> 8) & 255];
+const le64 = (v) => [...le32(v >>> 0), ...le32(Math.floor(v / 2 ** 32))];
+const CRC = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) { let r = i << 24; for (let k = 0; k < 8; k++) r = r & 0x80000000 ? (r << 1) ^ 0x04c11db7 : r << 1; t[i] = r >>> 0; }
+  return t;
+})();
+function oggPage(packets, granule, seq, flags) {
+  const lace = packets.flatMap((p) => [...Array(Math.floor(p.length / 255)).fill(255), p.length % 255]);
+  const head = [...enc8('OggS'), 0, flags, ...le64(granule), ...le32(0x4b59a10), ...le32(seq), 0, 0, 0, 0, lace.length, ...lace];
+  const page = new Uint8Array(head.length + packets.reduce((a, p) => a + p.length, 0));
+  page.set(head, 0);
+  let o = head.length;
+  for (const p of packets) { page.set(p, o); o += p.length; }
+  let c = 0;
+  for (let i = 0; i < page.length; i++) c = ((c << 8) ^ CRC[((c >>> 24) ^ page[i]) & 255]) >>> 0;
+  page.set(le32(c), 22);
+  return page;
+}
+function ogg(frames, preSkip, length) {
+  const pages = [
+    oggPage([new Uint8Array([...enc8('OpusHead'), 1, 2, ...le16(preSkip), ...le32(48000), 0, 0, 0])], 0, 0, 2),
+    oggPage([new Uint8Array([...enc8('OpusTags'), ...le32(5), ...enc8('Kiayo'), ...le32(0)])], 0, 1, 0),
+  ];
+  let granule = preSkip, seq = 2, batch = [], segs = 0;
+  frames.forEach((f, i) => {
+    const s = Math.floor(f.data.length / 255) + 1;
+    if (segs + s > 255) { pages.push(oggPage(batch, granule, seq++, 0)); batch = []; segs = 0; }
+    batch.push(f.data);
+    segs += s;
+    granule += f.samples;
+    if (i === frames.length - 1) pages.push(oggPage(batch, Math.min(granule, preSkip + length), seq++, 4));
+  });
+  return new Blob(pages, { type: 'audio/ogg' });
+}
+
+async function opus(url, bitrate) {
+  const buf = await new OfflineAudioContext(2, 48000, 48000).decodeAudioData(await (await fetch(url)).arrayBuffer());
+  const n = buf.length, L = buf.getChannelData(0), R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L;
+  const frames = [];
+  let fail = null, preSkip = 312;
+  const enc = new AudioEncoder({
+    output: (c, meta) => {
+      const b = new Uint8Array(c.byteLength);
+      c.copyTo(b);
+      frames.push({ data: b, samples: Math.round(((c.duration || 20000) * 48000) / 1e6) });
+      const d = meta && meta.decoderConfig && meta.decoderConfig.description;
+      if (d && d.byteLength >= 12) {
+        const v = new DataView(d instanceof ArrayBuffer ? d : d.buffer, d.byteOffset || 0, d.byteLength);
+        if (v.getUint32(0) === 0x4f707573) preSkip = v.getUint16(10, true); // 'Opus'Head
+      }
+    },
+    error: (e) => (fail = e),
+  });
+  enc.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: 2, bitrate });
+  const F = 9600;
+  for (let i = 0; i < n; i += F) {
+    const len = Math.min(F, n - i), data = new Float32Array(len * 2);
+    data.set(L.subarray(i, i + len), 0);
+    data.set(R.subarray(i, i + len), len);
+    enc.encode(new AudioData({ format: 'f32-planar', sampleRate: 48000, numberOfFrames: len, numberOfChannels: 2, timestamp: Math.round((i / 48000) * 1e6), data }));
+  }
+  await enc.flush();
+  enc.close();
+  if (fail) throw fail;
+  return ogg(frames, preSkip, n);
+}
+
+async function aac(url, bitrate) {
+  const buf = await new OfflineAudioContext(2, 48000, 48000).decodeAudioData(await (await fetch(url)).arrayBuffer());
+  const sr = buf.sampleRate, n = buf.length, L = buf.getChannelData(0), R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L;
+  const parts = [];
+  let fail = null, asc = null;
+  const enc = new AudioEncoder({
+    output: (c, meta) => { const b = new Uint8Array(c.byteLength); c.copyTo(b); parts.push(b); if (meta && meta.decoderConfig && meta.decoderConfig.description) asc = new Uint8Array(meta.decoderConfig.description); },
+    error: (e) => (fail = e),
+  });
+  enc.configure({ codec: 'mp4a.40.2', sampleRate: sr, numberOfChannels: 2, bitrate, aac: { format: 'aac' } });
+  const F = 8192;
+  for (let i = 0; i < n; i += F) {
+    const len = Math.min(F, n - i), data = new Float32Array(len * 2);
+    data.set(L.subarray(i, i + len), 0);
+    data.set(R.subarray(i, i + len), len);
+    enc.encode(new AudioData({ format: 'f32-planar', sampleRate: sr, numberOfFrames: len, numberOfChannels: 2, timestamp: Math.round((i / sr) * 1e6), data }));
+  }
+  await enc.flush();
+  enc.close();
+  if (fail) throw fail;
+  if (!asc) throw new Error('no AudioSpecificConfig from the encoder');
+  return m4a(parts, asc, sr, 2);
+}
+
+async function shrink(url, max, type, quality) {
+  const img = new Image();
+  img.src = url;
+  await img.decode();
+  const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+  const c = new OffscreenCanvas(Math.round(img.naturalWidth * k), Math.round(img.naturalHeight * k));
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  return c.convertToBlob({ type, quality });
+}
+
+const M = await (await fetch('/_build/manifest.json')).json();
+const done = {};
+for (const a of M.audio) {
+  const blob = await (a.codec === 'aac' ? aac : opus)('/' + a.path, a.bitrate);
+  await put(a.out, blob);
+  done[a.path] = a.out;
+  log(`${a.path} → ${a.out}  ${(blob.size / 1e6).toFixed(2)} MB`);
+}
+for (const im of M.images) {
+  const blob = await shrink('/' + im.path, im.max, im.type, im.quality);
+  await put(im.out, blob);
+  done[im.path] = im.out;
+  log(`${im.path} → ${im.out}  ${(blob.size / 1e3).toFixed(0)} KB`);
+}
+await put('done.json', new Blob([JSON.stringify(done, null, 1)], { type: 'application/json' }));
+log('done');
+window.__done = true;
+</script>
+</body>
+</html>

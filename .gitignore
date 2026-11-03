@@ -1,0 +1,7 @@
+# raw downloads, the score PDF, the Python environment for the tools
+_raw/
+# build scratch and the packed single file (that one is published on the gh-pages branch)
+_build/
+dist/
+__pycache__/
+*.pyc

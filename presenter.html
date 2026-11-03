@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>발표자 화면</title>
+<style>
+  @font-face { font-family: "Hahmlet"; src: url("assets/fonts/Hahmlet.ttf") format("truetype"); font-weight: 100 900; }
+  @font-face { font-family: "Pretendard"; src: url("assets/fonts/PretendardVariable.woff2") format("woff2"); font-weight: 45 920; }
+  @font-face { font-family: "ZhSans"; src: url("assets/fonts/NotoSansSC-VF.ttf") format("truetype"); font-weight: 100 900; unicode-range: U+2E80-2FDF, U+3000-303F, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF; }
+  @font-face { font-family: "ZhSerif"; src: url("assets/fonts/NotoSerifSC-VF.ttf") format("truetype"); font-weight: 200 900; unicode-range: U+2E80-2FDF, U+3000-303F, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF; }
+  :root { --bg: #0E0C0A; --ink: #EDE4D6; --ink2: #9C9184; --rule: #2B2621; --acc: #C8924A; --me: #E5482F; --A: #EFECE6; --B: #C8924A; --C: #E5482F; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--ink); font-family: "ZhSans", "Pretendard", sans-serif; height: 100vh; display: grid; grid-template-rows: auto auto 1fr auto auto; gap: 22px; padding: 28px 36px; word-break: keep-all; }
+  header { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; border-bottom: 1px solid var(--rule); padding-bottom: 18px; }
+  .track { font: italic 300 40px/1 "ZhSerif", "Hahmlet", Georgia, serif; color: var(--acc); }
+  .title { font: 400 28px/1.25 "ZhSerif", "Hahmlet", Georgia, serif; margin-top: 8px; }
+  .clock { text-align: right; font-variant-numeric: tabular-nums; }
+  .clock b { font: 500 46px/1 "ZhSans", "Pretendard"; display: block; }
+  .clock span { font-size: 14px; color: var(--ink2); }
+  #notes { font: 400 27px/1.75 "ZhSans", "Pretendard"; overflow: auto; max-width: 1100px; overflow-wrap: anywhere; }
+  #hint { display: none; align-self: start; font: 500 18px/1.4 "ZhSans", "Pretendard"; color: var(--bg); background: var(--acc); padding: 10px 16px; border-radius: 8px; justify-self: start; }
+  #hint.on { display: block; }
+  #cue { display: none; align-self: start; justify-self: start; font: 600 30px/1.2 "ZhSans", "Pretendard"; color: #fff; background: #E5482F; padding: 12px 20px; border-radius: 10px; font-variant-numeric: tabular-nums; }
+  #cue.on { display: block; }
+  #cue.past { background: #2B2621; color: #E5482F; }
+  #dark { display: none; font: 600 15px/1 "ZhSans", "Pretendard"; color: #0E0C0A; background: #EDE4D6; padding: 8px 12px; border-radius: 999px; margin-left: 12px; vertical-align: 6px; }
+  #dark.on { display: inline-block; }
+  footer { display: grid; grid-template-columns: 1fr auto; gap: 24px; align-items: end; border-top: 1px solid var(--rule); padding-top: 18px; }
+  .next { font-size: 15px; color: var(--ink2); }
+  .next b { display: block; font: 400 22px/1.3 "ZhSerif", "Hahmlet", Georgia, serif; color: var(--ink); margin-top: 6px; }
+  .sides { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 16px; }
+  .side { font-size: 13px; color: var(--ink2); }
+  .side i { display: block; height: 4px; background: var(--rule); margin-top: 6px; border-radius: 2px; overflow: hidden; }
+  .side i em { display: block; height: 100%; width: 0; background: var(--c); }
+  .side.over i em { background: var(--me); }
+  .side.now { color: var(--ink); }
+  .btns { display: flex; gap: 10px; }
+  button { font: 500 16px/1 "ZhSans", "Pretendard"; background: none; color: var(--ink); border: 1px solid var(--rule); padding: 16px 22px; border-radius: 999px; cursor: pointer; }
+  button:active { transform: scale(.97); }
+  body[data-theme="paper"] { --acc: #2D58C8; }
+  body[data-theme="black"] { --acc: #E5482F; }
+</style>
+</head>
+<body>
+  <header>
+    <div><div class="track" id="track">—<span id="dark"></span></div><div class="title" id="title">메인 화면을 기다리는 중…</div></div>
+    <div class="clock"><b id="tSlide">0:00</b><span><span id="l-page">이 페이지 · 전체</span> <span id="tAll">00:00</span> / <span id="l-goal">목표</span> 18:30</span></div>
+  </header>
+  <div id="cue"></div>
+  <div id="notes"></div>
+  <div id="hint"></div>
+  <footer>
+    <div>
+      <div class="next" id="next">NEXT</div>
+      <div class="sides" id="sides"></div>
+    </div>
+    <div class="btns"><button id="prev">← 이전</button><button id="black">●</button><button id="nextb">다음 →</button></div>
+  </footer>
+<script>
+  // the presenter window follows the deck's language (L on the main screen)
+  const UI = {
+    ko: { wait: '메인 화면을 기다리는 중…', page: '이 페이지 · 전체', goal: '목표', prologue: '프롤로그', min: '분', next: '다음', last: '마지막 페이지', prev: '← 이전', nextb: '다음 →', title: '발표자 화면', black: '화면 끄기 ( . )', dark: '화면 꺼짐', cue: '3:41 반전까지', cuePast: '반전 중 — 끝까지 들려주세요', paused: '(일시정지)' },
+    zh: { wait: '等待主屏幕…', page: '本页 · 全程', goal: '目标', prologue: '序幕', min: ' 分钟', next: '下一页', last: '最后一页', prev: '← 上一页', nextb: '下一页 →', title: '演讲者视图', black: '黑屏（.）', dark: '已黑屏', cue: '距 3:41 转折', cuePast: '转折中，放到最后', paused: '（暂停）' },
+  };
+  let L = UI.ko, lang = 'ko';
+  // suggested minutes per side; the bars turn red when a side runs over
+  const PLAN = [['', 'prologue', 1.5, '#9C9184'], ['A', 'Side A', 7, '#EFECE6'], ['B', 'Side B', 6, '#C8924A'], ['C', 'Side C', 4, '#E5482F']];
+  const spent = Object.fromEntries(PLAN.map(([k]) => [k, 0]));
+  const $ = (s) => document.getElementById(s);
+  const chrome = () => {
+    document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'ko';
+    document.title = L.title;
+    $('sides').innerHTML = PLAN.map(([k, n, m, c]) => `<div class="side" id="side-${k || 'P'}" style="--c:${c}">${L[n] || n} · ${m}${L.min}<i><em></em></i></div>`).join('');
+    $('l-page').textContent = L.page;
+    $('l-goal').textContent = L.goal;
+    $('prev').textContent = L.prev;
+    $('nextb').textContent = L.nextb;
+    $('black').textContent = L.black;
+    $('dark').textContent = L.dark;
+    if (!st) $('title').textContent = L.wait;
+  };
+  // opened by the deck: talk to it directly (works in the packaged file); otherwise use the channel
+  const bc = window.opener ? null : new BroadcastChannel('echoes-deck');
+  const ch = { postMessage: (m) => (window.opener ? window.opener.postMessage(m, '*') : bc.postMessage(m)) };
+  let st = null, lastTick = Date.now();
+  chrome();
+  const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  const onMsg = (m) => {
+    const d = m.data;
+    if (d.type === 'cue') {
+      const c = $('cue');
+      c.classList.toggle('on', d.at !== null);
+      if (d.at === null) return;
+      c.classList.toggle('past', d.at <= 0);
+      c.textContent = d.at > 0 ? `${L.cue} ${fmt(d.at)}${d.playing ? '' : ' ' + L.paused}` : L.cuePast;
+      return;
+    }
+    if (d.type !== 'state') return;
+    st = d;
+    if ((d.lang || 'ko') !== lang) { lang = d.lang || 'ko'; L = UI[lang]; chrome(); }
+    document.body.dataset.theme = d.theme;
+    $('dark').classList.toggle('on', !!d.dark);
+    $('track').textContent = d.track || (d.i <= 3 ? L.prologue : '');
+    $('title').textContent = d.name;
+    $('notes').textContent = d.notes;
+    $('hint').textContent = d.hint;
+    $('hint').classList.toggle('on', !!d.hint);
+    $('next').innerHTML = d.next ? `${L.next} — ${d.next.track || ''}<b>${d.next.name}</b>` : L.last;
+  };
+  if (bc) bc.onmessage = onMsg;
+  addEventListener('message', (e) => { if (!window.opener || e.source === window.opener) onMsg(e); });
+  ch.postMessage({ type: 'hello' });
+  const cmd = (c) => ch.postMessage({ type: 'cmd', cmd: c });
+  $('prev').onclick = () => cmd('prev');
+  $('nextb').onclick = () => cmd('next');
+  $('black').onclick = () => cmd('black');
+  addEventListener('keydown', (e) => {
+    if (['ArrowRight', 'PageDown', ' ', 'Enter'].includes(e.key)) { e.preventDefault(); cmd('next'); }
+    if (['ArrowLeft', 'PageUp', 'Backspace'].includes(e.key)) { e.preventDefault(); cmd('prev'); }
+    if (e.key === '.') cmd('black');
+  });
+  setInterval(() => {
+    const now = Date.now(), dt = (now - lastTick) / 1000;
+    lastTick = now;
+    if (!st || !st.started) return;
+    spent[st.side] = (spent[st.side] || 0) + dt;
+    $('tSlide').textContent = fmt((now - st.tSlide) / 1000);
+    $('tAll').textContent = fmt((now - st.tStart) / 1000);
+    PLAN.forEach(([k, n, m]) => {
+      const el = $('side-' + (k || 'P')), u = spent[k] / (m * 60);
+      el.querySelector('em').style.width = Math.min(100, u * 100) + '%';
+      el.classList.toggle('over', u > 1);
+      el.classList.toggle('now', st.side === k);
+    });
+  }, 250);
+</script>
+</body>
+</html>
