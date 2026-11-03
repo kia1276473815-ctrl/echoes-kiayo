@@ -17,10 +17,8 @@
 <!-- ============================================================ PROLOGUE -->
 <section class="slide" data-id="gate" data-theme="black">
   <div class="abs" style="left:0;right:0;top:450px;text-align:center">
-    <p class="d5" data-r="fade" style="--d:200">헤드폰 또는 스피커를 켜 주세요.</p>
-    <p class="cap" id="gate-status" data-i18n="js" style="margin-top:34px">불러오는 중</p>
-    <div style="width:360px;height:1px;margin:18px auto 0;background:var(--rule);position:relative;overflow:hidden"><i id="gate-bar" style="position:absolute;left:0;top:0;bottom:0;width:0;background:var(--ink);transition:width .4s"></i></div>
-    <p class="cap" id="gate-go" style="margin-top:30px;opacity:0;transition:opacity 1s"><span class="kbd">Space</span>&nbsp; 시작</p>
+    <!-- nothing on the gate: one tap or key and the deck begins. Only a failed load says something -->
+    <p class="cap" id="gate-status" data-i18n="js"></p>
   </div>
 </section>
 
@@ -358,18 +356,15 @@
   <h2 class="d2 abs it" data-r="line" style="left:var(--m);top:150px;--d:200">Totem</h2>
   <p class="cap abs num" id="totem-meta" data-r style="left:var(--m);top:318px;--d:500"></p>
   <p class="body abs" data-r style="left:var(--m);top:366px;width:660px;--d:700" id="totem-text"></p>
-  <p class="cap abs" data-r="fade" style="left:var(--m);top:668px;width:640px;--d:1100"><b>son clave 3-2</b></p>
-  <canvas class="abs" id="cv-clave" style="left:var(--m);top:700px;width:640px;height:56px" data-r="fade" data-d="1200"></canvas>
-  <div class="abs" style="left:var(--m);top:790px;display:flex;gap:14px;align-items:center" data-r data-d="1000">
-    <button class="btn" id="totem-play">일시정지 <span class="kbd">K</span></button><button class="btn" id="totem-clave">클라베 소리 <span class="kbd">C</span></button><span class="cap num" id="totem-time">0:00</span>
+  <div class="abs" style="left:var(--m);top:640px;display:flex;gap:14px;align-items:center" data-r data-d="1000">
+    <button class="btn" id="totem-play">일시정지 <span class="kbd">K</span></button><span class="cap num" id="totem-time">0:00</span>
   </div>
-  <canvas class="abs" id="cv-totem-scrub" style="left:var(--m);top:880px;width:700px;height:70px"></canvas>
+  <canvas class="abs" id="cv-totem-scrub" style="left:var(--m);top:730px;width:700px;height:70px"></canvas>
 </section>
 
 <section class="slide" data-id="me-114514" data-theme="black" data-side="C" data-in="push" data-bed="114514">
   <div class="disc"></div>
   <div class="wedge" data-r style="--d:700"></div>
-  <canvas class="abs" id="cv-spiral" style="left:940px;top:80px;width:920px;height:920px"></canvas>
   <div class="tension"></div>
   <p class="run" data-r="fade">III — 나</p>
   <h2 class="abs soviet" data-r="line" style="left:var(--m);top:156px;--d:200">Прокофьев</h2>

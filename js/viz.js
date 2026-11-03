@@ -9,12 +9,42 @@ export const C = {
 let RS = 1;
 export const setRenderScale = (s) => { RS = s; };
 export const renderScale = () => RS;
-const hexRgb = (h) => { const n = parseInt(h.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; };
-export const rgba = (h, a) => { const [r, g, b] = hexRgb(h); return `rgba(${r},${g},${b},${a})`; };
+// colours are a handful of hex strings drawn thousands of times a frame: each is taken apart once
+const RGB = new Map();
+const hexRgb = (h) => { let v = RGB.get(h); if (!v) { const n = parseInt(h.slice(1), 16); RGB.set(h, (v = [n >> 16, (n >> 8) & 255, n & 255])); } return v; };
+export const rgba = (h, a) => { const v = hexRgb(h); return `rgba(${v[0]},${v[1]},${v[2]},${a})`; };
 export const mix = (a, b, t) => { const A = hexRgb(a), B = hexRgb(b); return '#' + A.map((v, i) => Math.round(v + (B[i] - v) * t).toString(16).padStart(2, '0')).join(''); };
 export const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
 export const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 const SANS = '"Pretendard", "ZhSans", sans-serif';
+
+// Text on a GPU canvas is dear: the first fillText of a frame rasterises its glyphs again (about half a millisecond),
+// and the labels drawn here hardly ever change. So each label is drawn once into a small bitmap at the screen's
+// resolution, with its glyphs at the same fraction of a pixel as they would have had, and copied onto whole device
+// pixels from then on: the same pixels as the text. A context that is rotated or scaled, or a face that has not loaded
+// yet, gets plain text as before.
+const STAMPS = new Map(), MEASURE = document.createElement('canvas').getContext('2d');
+function stamp(str, font, color, align, base, fx, fy) {
+  const key = `${RS}|${fx}|${fy}|${font}|${color}|${align}|${base}|${str}`;
+  let st = STAMPS.get(key);
+  if (st) { STAMPS.delete(key); STAMPS.set(key, st); return st; }   // most recently used at the back
+  if (!document.fonts.check(font, str)) return null;
+  Object.assign(MEASURE, { font, textAlign: align, textBaseline: base });
+  const m = MEASURE.measureText(str), pad = 2;
+  // the anchor's offset in the bitmap, in whole device pixels
+  const ox = Math.ceil((pad + m.actualBoundingBoxLeft) * RS), oy = Math.ceil((pad + m.actualBoundingBoxAscent) * RS);
+  const cv = document.createElement('canvas');
+  cv.width = ox + Math.ceil((m.actualBoundingBoxRight + pad) * RS) + 1;
+  cv.height = oy + Math.ceil((m.actualBoundingBoxDescent + pad) * RS) + 1;
+  const g = cv.getContext('2d');
+  g.setTransform(RS, 0, 0, RS, 0, 0);
+  Object.assign(g, { font, fillStyle: color, textAlign: align, textBaseline: base });
+  g.fillText(str, (ox + fx) / RS, (oy + fy) / RS);
+  st = { cv, ox, oy };
+  STAMPS.set(key, st);
+  if (STAMPS.size > 300) STAMPS.delete(STAMPS.keys().next().value);
+  return st;
+}
 
 export class Base {
   constructor(cv, o = {}) { this.cv = cv; this.g = cv.getContext('2d'); this.o = o; this.fit(); }
@@ -26,17 +56,24 @@ export class Base {
     this.g.setTransform(RS, 0, 0, RS, 0, 0);
   }
   clear() { this.g.clearRect(0, 0, this.w, this.h); }
+  // leaving the page: give the bitmap back (a full-screen canvas holds 8-33 MB); the next visit sizes it again
+  destroy() { this.cv.width = this.cv.height = 0; }
   fade(a) {
     const g = this.g;
     g.save(); g.globalCompositeOperation = 'destination-out'; g.fillStyle = `rgba(0,0,0,${a})`; g.fillRect(0, 0, this.w, this.h); g.restore();
   }
   text(s, x, y, o = {}) {
-    const g = this.g;
-    g.font = `${o.weight || 450} ${Math.round((o.size || 14) * 1.15)}px ${SANS}`;   // read from the back of the room
-    g.fillStyle = o.color || C.paper2;
-    g.textAlign = o.align || 'left';
-    g.textBaseline = o.base || 'alphabetic';
-    g.fillText(t(s), x, y);
+    const g = this.g, str = t(s), color = o.color || C.paper2, align = o.align || 'left', base = o.base || 'alphabetic';
+    const font = `${o.weight || 450} ${Math.round((o.size || 14) * 1.15)}px ${SANS}`;   // read from the back of the room
+    const m = g.getTransform();
+    if (m.b === 0 && m.c === 0 && Math.abs(m.a - RS) < 1e-4 && Math.abs(m.d - RS) < 1e-4) {
+      // where the anchor falls in device pixels: the whole part places the bitmap, the fraction is drawn into it
+      const ax = x * m.a + m.e, ay = y * m.d + m.f, ix = Math.floor(ax), iy = Math.floor(ay);
+      const st = stamp(str, font, color, align, base, +(ax - ix).toFixed(3), +(ay - iy).toFixed(3));
+      if (st) { g.drawImage(st.cv, (ix - st.ox - m.e) / m.a, (iy - st.oy - m.f) / m.d, st.cv.width / m.a, st.cv.height / m.d); return; }
+    }
+    Object.assign(g, { font, fillStyle: color, textAlign: align, textBaseline: base });
+    g.fillText(str, x, y);
   }
 }
 
@@ -63,11 +100,13 @@ export class Raster extends Base {
     this.spikes = this.spikes.filter((s) => t - s.t < span);
     g.fillStyle = C.paperRule;
     for (let k = 0; k <= n; k++) g.fillRect(left, top + k * rh, w - left, 1);
+    g.fillStyle = C.paperInk;
     for (const s of this.spikes) {
       const x = w - (t - s.t) * speed, row = n - 1 - s.k;
-      g.fillStyle = rgba(C.paperInk, 0.35 + s.a * 0.65);
+      g.globalAlpha = 0.35 + s.a * 0.65;
       g.fillRect(x, top + row * rh + rh * 0.15, 1.6, rh * 0.7);
     }
+    g.globalAlpha = 1;
     this.labels.forEach((l, i) => l && this.text(l + (i === 9 ? ' Hz' : ''), left - 10, top + i * rh + rh * 0.68, { align: 'right', size: 12 }));
   }
 }
@@ -190,74 +229,6 @@ export class Layers extends Base {
   }
 }
 
-// ------------------------------------------------------------ spin to make an explosion (am-story)
-export class Spin extends Base {
-  constructor(cv, o = {}) {
-    super(cv, o);
-    this.p = [];
-    this.last = null;
-    this.angVel = 0;
-    this.energy = 0;
-    this.eng = o.eng;
-    this.whoosh = 0;
-    this.vol = 1;
-  }
-  move(x, y, t) {
-    if (this.last) {
-      const cx = this.cx ?? x, cy = this.cy ?? y;
-      this.cx = cx * 0.96 + x * 0.04;
-      this.cy = cy * 0.96 + y * 0.04;
-      const a0 = Math.atan2(this.last.y - this.cy, this.last.x - this.cx), a1 = Math.atan2(y - this.cy, x - this.cx);
-      let d = a1 - a0;
-      if (d > Math.PI) d -= Math.PI * 2;
-      if (d < -Math.PI) d += Math.PI * 2;
-      const r = Math.hypot(x - this.cx, y - this.cy);
-      if (r > 40) this.angVel += Math.abs(d);
-    }
-    this.last = { x, y };
-    this.mx = x; this.my = y;
-  }
-  draw(A, t, dt) {
-    const { g } = this;
-    this.angVel *= Math.pow(0.12, dt);
-    this.energy = clamp(this.energy + this.angVel * dt * 0.9 - dt * 0.35, 0, 1.2);
-    if (this.angVel > 0.08 && this.mx != null) {
-      for (let i = 0; i < 3 + this.energy * 10; i++) {
-        const a = Math.random() * Math.PI * 2, s = 40 + Math.random() * 120 * (1 + this.energy);
-        this.p.push({ x: this.mx, y: this.my, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.6 + Math.random() * 0.6, k: Math.random() });
-      }
-      if (t - this.whoosh > 0.25) {
-        this.whoosh = t;
-        this.eng.noiseHit({ f0: 500 + this.energy * 2500, f1: 300, dur: 0.4, attack: 0.08, gain: (0.05 + this.energy * 0.1) * this.vol, pan: (this.mx - 960) / 960 });
-      }
-    }
-    if (this.energy >= 1) {
-      this.energy = 0.2;
-      for (let i = 0; i < 700; i++) {
-        const a = Math.random() * Math.PI * 2, s = Math.pow(Math.random(), 0.5) * 1100;
-        this.p.push({ x: this.mx, y: this.my, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 1.2 + Math.random(), k: Math.random() });
-      }
-      this.eng.thump({ gain: 0.9 * this.vol });
-      this.eng.noiseHit({ f0: 3000, f1: 140, dur: 2, gain: 0.3 * this.vol, verb: 0.6 });
-    }
-    this.fade(0.25);
-    g.globalCompositeOperation = 'lighter';
-    for (const q of this.p) {
-      q.vx *= Math.pow(0.05, dt); q.vy *= Math.pow(0.05, dt); q.vy += 30 * dt;
-      q.x += q.vx * dt; q.y += q.vy * dt; q.life -= dt;
-      g.fillStyle = rgba(q.k > 0.8 ? '#FFE8C0' : C.ember, clamp(q.life) * 0.9);
-      g.fillRect(q.x, q.y, 1.5 + q.k * 1.5, 1.5 + q.k * 1.5);
-    }
-    this.p = this.p.filter((q) => q.life > 0);
-    g.globalCompositeOperation = 'source-over';
-    if (this.energy > 0.02 && this.mx != null) {
-      g.strokeStyle = rgba(C.ember, 0.5);
-      g.lineWidth = 2;
-      g.beginPath(); g.arc(this.mx, this.my, 26, -Math.PI / 2, -Math.PI / 2 + this.energy * Math.PI * 2); g.stroke();
-    }
-  }
-}
-
 // ------------------------------------------------------------ spectrogram (am-ill)
 export class Spectrogram extends Base {
   constructor(cv, o = {}) {
@@ -286,28 +257,6 @@ export class Spectrogram extends Base {
     });
     this.text('Hz', 46, 14, { size: 12, align: 'right', color: C.night2 });
     g.restore();
-  }
-}
-
-// ------------------------------------------------------------ low end vs the rest (am-whale)
-export class LowVsHigh extends Base {
-  constructor(cv, o = {}) { super(cv, o); this.hist = []; }
-  draw(A) {
-    const { g, w, h } = this, n = 360, x0 = 1000, y0 = 880, hh = 130;
-    this.hist.push([A.range(20, 200), A.range(200, 8000)]);
-    if (this.hist.length > n) this.hist.shift();
-    this.clear();
-    const line = (k, col, width, scale) => {
-      g.strokeStyle = col; g.lineWidth = width; g.beginPath();
-      this.hist.forEach((v, i) => { const x = x0 + (i / (n - 1)) * (w - x0 - 120), y = y0 - Math.min(1, v[k] * scale) * hh; i ? g.lineTo(x, y) : g.moveTo(x, y); });
-      g.stroke();
-    };
-    line(1, rgba(C.nightInk, 0.45), 1.2, 1.8);
-    line(0, C.ill, 3, 1.2);
-    g.fillStyle = rgba(C.nightInk, 0.18);
-    g.fillRect(x0, y0, w - x0 - 120, 1);
-    this.text('200Hz 이하 — 저음', x0, y0 + 30, { size: 15, weight: 600, color: C.ill });
-    this.text('200Hz 이상 — 나머지 전부', x0 + 230, y0 + 30, { size: 15, color: C.night2 });
   }
 }
 
@@ -343,61 +292,6 @@ export class Scrub extends Base {
       this.text(m.label, Math.min(w - 2, Math.max(2, x)), h - 1, { size: 12, color: pos >= m.t ? C.blackInk : C.black2, align: x > w * 0.8 ? 'right' : x < w * 0.15 ? 'left' : 'center' });
     });
     if (this.hover >= 0) { g.fillStyle = rgba(C.blackInk, 0.4); g.fillRect((this.hover / this.dur) * w, 0, 1, mid); }
-  }
-}
-
-// ------------------------------------------------------------ the whole track wound into a spiral (me-114514)
-export class Spiral extends Base {
-  constructor(cv, o = {}) {
-    super(cv, o);
-    this.peaks = o.peaks; this.dur = o.duration; this.rev = o.revolution;
-    this.cx = this.w / 2; this.cy = this.h / 2; this.r0 = 70; this.r1 = Math.min(this.w, this.h) / 2 - 30;
-    this.turns = this.dur / this.rev;
-    cv.style.cursor = 'pointer';
-    cv.onpointerdown = (e) => {
-      const r = cv.getBoundingClientRect(), x = ((e.clientX - r.left) / r.width) * this.w - this.cx, y = ((e.clientY - r.top) / r.height) * this.h - this.cy;
-      const ang = (Math.atan2(y, x) + Math.PI / 2 + Math.PI * 2) % (Math.PI * 2), rad = Math.hypot(x, y);
-      let best = 0, bd = 1e9;
-      for (let k = 0; k <= Math.ceil(this.turns); k++) {
-        const t = (k + ang / (Math.PI * 2)) * this.rev;
-        if (t > this.dur) break;
-        const d = Math.abs(this.radius(t) - rad);
-        if (d < bd) { bd = d; best = t; }
-      }
-      o.onSeek(best);
-    };
-  }
-  radius(t) { return this.r0 + (this.r1 - this.r0) * (t / this.dur); }
-  pt(t, extra = 0) {
-    const r0 = this.radius(t);
-    // after 3:41 the spiral warps like something seen through water
-    const a = (t / this.rev) * Math.PI * 2 - Math.PI / 2 + (this.warp || 0) * Math.sin(r0 * 0.035 - (this.now || 0) * 2.2) * 0.6, r = r0 + extra;
-    return [this.cx + Math.cos(a) * r, this.cy + Math.sin(a) * r, a];
-  }
-  draw(A, t) {
-    const { g, peaks } = this, pos = this.o.getPos(), dim = this.dim ?? 1, play = this.playColor || C.me;
-    this.now = t;
-    this.clear();
-    if (!peaks) return;
-    const n = peaks.length, gap = (this.r1 - this.r0) / this.turns;
-    if (!this.norm) { let m = 0; for (let i = 0; i < n; i++) m = Math.max(m, peaks[i]); this.norm = 1 / (m || 1); }
-    // beat grid: 8 spokes = 8 bars
-    g.strokeStyle = rgba(C.blackInk, 0.06);
-    for (let k = 0; k < 8; k++) {
-      const a = (k / 8) * Math.PI * 2 - Math.PI / 2;
-      g.beginPath(); g.moveTo(this.cx + Math.cos(a) * this.r0 * 0.6, this.cy + Math.sin(a) * this.r0 * 0.6); g.lineTo(this.cx + Math.cos(a) * (this.r1 + 20), this.cy + Math.sin(a) * (this.r1 + 20)); g.stroke();
-    }
-    for (let i = 0; i < n; i++) {
-      const v = Math.pow(peaks[i] * this.norm, 1.4), tt = (i / n) * this.dur, len = Math.max(1, v * gap * 0.95);
-      const [x0, y0] = this.pt(tt, -len / 2), [x1, y1] = this.pt(tt, len / 2);
-      g.strokeStyle = tt <= pos ? rgba(play, (0.5 + v * 0.5) * dim) : rgba(C.blackInk, (0.12 + v * 0.7) * dim);
-      g.lineWidth = 1.6;
-      g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
-    }
-    const [hx, hy] = this.pt(pos);
-    const pr = 5 + A.bands.sRms * 20;
-    g.fillStyle = C.blackInk;
-    g.beginPath(); g.arc(hx, hy, pr, 0, Math.PI * 2); g.fill();
   }
 }
 
@@ -557,46 +451,6 @@ export class Picado extends Base {
   }
 }
 
-// son clave 3-2 laid over the track's own tempo: two bars of eighth notes, five strokes
-export class Clave extends Base {
-  constructor(cv, o = {}) {
-    super(cv, o);
-    this.steps = [0, 3, 6, 10, 12];
-    this.cur = -1;
-    this.hitAt = new Float32Array(16).fill(-9);
-    this.sched = -1;
-  }
-  draw(A, t) {
-    const g = this.g, { w, h } = this, o = this.o, pos = o.getPos(), step = 60 / o.bpm / 2;
-    const k = Math.floor((pos - o.phase) / step), cur = ((k % 16) + 16) % 16;
-    // the next stroke is scheduled at its exact time so the click doesn't wobble with the frame rate
-    if (o.sound() && o.playing()) {
-      const next = k + 1, ni = ((next % 16) + 16) % 16;
-      if (this.steps.includes(ni) && this.sched !== next) { this.sched = next; o.onHit(o.phase + next * step - pos); }
-    }
-    if (cur !== this.cur) { this.cur = cur; if (this.steps.includes(cur)) this.hitAt[cur] = t; }
-    this.clear();
-    const sp = w / 16, y = h / 2 + 6;
-    g.strokeStyle = rgba(C.blackInk, 0.18);
-    g.lineWidth = 1;
-    g.beginPath(); g.moveTo(sp * 8, y - 18); g.lineTo(sp * 8, y + 18); g.stroke();
-    this.text('3', 0, 12, { size: 12, color: C.black2 });
-    this.text('2', sp * 8 + 8, 12, { size: 12, color: C.black2 });
-    for (let i = 0; i < 16; i++) {
-      const x = i * sp + sp / 2, on = this.steps.includes(i), age = t - this.hitAt[i];
-      if (on) {
-        const flash = Math.max(0, 1 - age / 0.35);
-        g.fillStyle = rgba(C.me, 0.35 + flash * 0.65);
-        g.beginPath(); g.arc(x, y, 9 + flash * 4, 0, Math.PI * 2); g.fill();
-      } else {
-        g.fillStyle = rgba(C.blackInk, i === cur ? 0.7 : 0.2);
-        g.beginPath(); g.arc(x, y, 2.6, 0, Math.PI * 2); g.fill();
-      }
-      if (i === cur) { g.strokeStyle = rgba(C.blackInk, 0.8); g.lineWidth = 1.2; g.beginPath(); g.arc(x, y, 15, 0, Math.PI * 2); g.stroke(); }
-    }
-  }
-}
-
 // ---------------------------------------------------------------- Прокофьев: the Soviet layer
 // 5 March 1953: the leading Soviet music magazine gave Stalin pages 1–115 and Prokofiev page 116
 export class Page116 extends Base {
@@ -648,6 +502,9 @@ export class Sand extends Base {
     this.gust += (0.35 + A.bands.sLow * 2.4 - this.gust) * Math.min(1, dt * 3);
     this.clear();
     g.lineCap = 'round';
+    // one colour for all of it; each grain's own opacity goes through globalAlpha (the same result as an rgba() per
+    // grain, without building and parsing 900 colour strings a frame)
+    g.strokeStyle = 'rgb(252,240,220)';
     for (const p of this.ps) {
       const vx = -(150 + 320 * p.v) * this.gust, vy = Math.sin(t * 1.7 + p.ph) * 14 - 6 * this.gust;
       p.x += vx * dt; p.y += vy * dt;
@@ -657,10 +514,11 @@ export class Sand extends Base {
       if (fade <= 0) continue;
       // a few long soft veils of blown sand, the rest single grains
       const L = p.haze ? 0.32 : 0.05;
-      g.strokeStyle = `rgba(252,240,220,${(p.haze ? 0.06 : p.a) * fade})`;
+      g.globalAlpha = (p.haze ? 0.06 : p.a) * fade;
       g.lineWidth = p.haze ? 7 + p.s * 5 : p.s;
       g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(p.x - vx * L, p.y - vy * L); g.stroke();
     }
+    g.globalAlpha = 1;
   }
 }
 
@@ -671,8 +529,7 @@ export class Sand extends Base {
 // bar of semiquavers, slower through a long note), so every note crosses the red playhead (on the clock's axis) when
 // it sounds, and lights red as it does. Where the strings rest and only the
 // electronics play, the same strip shows the recording's spectrogram. The high clicks (0:34-0:44) also scratch the
-// whole frame for a moment, like a scratch on film, and each low hit sends a ring out from the clock
-// (js/pro-events.js).
+// whole frame for a moment, like a scratch on film (js/pro-events.js).
 export class Stave extends Base {
   // o.pos(): the song position as heard; o.ev: the events; o.score: where the bars sound; o.bars: the sheet's layout;
   // o.sheet, o.spectrum: the images' urls; o.show(): whether it shows
@@ -680,7 +537,7 @@ export class Stave extends Base {
     super(cv, o);
     this.ev = o.ev; this.sc = o.score; this.L = o.bars;
     this.a = 0;
-    this.scratch = []; this.rings = [];
+    this.scratch = [];
     this.last = -1;
     // the sheet comes as light ink on black: made into paper-coloured ink (and a red copy) that is see-through between
     const sheet = new Image();
@@ -756,11 +613,9 @@ export class Stave extends Base {
       this.between(E.click, this.last, pos).forEach(([, s]) => {
         for (let k = 0, n = s > 25 ? 3 : s > 14 ? 2 : 1; k < n; k++) this.scratch.push({ x: Math.random() * 1920, t, w: 0.6 + Math.random() * 1.2, a: 0.25 + Math.min(0.5, s / 60) });
       });
-      this.between(E.beat, this.last, pos).forEach(([, s]) => this.rings.push({ t, s: Math.min(1, s / 25) }));
     }
     this.last = pos;
     this.scratch = this.scratch.filter((s) => t - s.t < 0.06);
-    this.rings = this.rings.filter((r) => t - r.t < 0.9);
     if (this.a < 0.01) return;
     g.save();
     g.globalAlpha = this.a;
@@ -768,13 +623,6 @@ export class Stave extends Base {
     g.globalCompositeOperation = 'lighter';
     for (const s of this.scratch) { g.fillStyle = `rgba(239,236,230,${s.a})`; g.fillRect(s.x, 0, s.w, 1080); }
     g.globalCompositeOperation = 'source-over';
-    // the rings out of the clock
-    for (const r of this.rings) {
-      const k = (t - r.t) / 0.9, e = 1 - Math.pow(1 - k, 3);
-      g.strokeStyle = `rgba(229,72,47,${(1 - k) * (0.3 + 0.45 * r.s)})`;
-      g.lineWidth = (2 + 4 * r.s) * (1 - k);
-      g.beginPath(); g.arc(1400, 540, 120 + e * (500 + 500 * r.s), 0, Math.PI * 2); g.stroke();
-    }
     // the strip
     const PX = 1400, H = this.L.h, Y = 1076 - H, u0 = this.at(pos), X = (s) => PX + this.at(s) - u0, XU = (u) => PX + u - u0;
     // the strip lies on its own dark band, so nothing of the hall shows through the score; a short fade above it and
@@ -891,10 +739,13 @@ export class Blast extends Base {
       if (v < 0.03) continue;
       const r1 = r0 + v * L;
       const hi = b / n;
-      g.strokeStyle = hi > 0.6 ? `rgba(237,228,214,${0.06 + v * 0.3})` : `rgba(200,146,74,${0.07 + v * 0.32})`;
+      // two colours, the opacity through globalAlpha (no colour string to build and parse per ray)
+      g.strokeStyle = hi > 0.6 ? 'rgb(237,228,214)' : 'rgb(200,146,74)';
+      g.globalAlpha = hi > 0.6 ? 0.06 + v * 0.3 : 0.07 + v * 0.32;
       g.lineWidth = 1 + v * 2.4;
       g.beginPath(); g.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0); g.lineTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1); g.stroke();
     }
+    g.globalAlpha = 1;
     // the shock rings
     this.rings = this.rings.filter((r) => t - r.t < 1.2);
     for (const r of this.rings) {
@@ -911,7 +762,8 @@ export class Blast extends Base {
       p.vx *= drag; p.vy *= drag; p.vy += 120 * dt;
       p.x += p.vx * dt; p.y += p.vy * dt;
       const k = (t - p.t) / p.life;
-      g.strokeStyle = p.hot ? `rgba(255,236,200,${(1 - k) * 0.5})` : `rgba(200,146,74,${(1 - k) * 0.4})`;
+      g.strokeStyle = p.hot ? 'rgb(255,236,200)' : 'rgb(200,146,74)';
+      g.globalAlpha = (1 - k) * (p.hot ? 0.5 : 0.4);
       g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(p.x - p.vx * 0.03, p.y - p.vy * 0.03); g.stroke();
     }
     g.restore();
@@ -942,10 +794,13 @@ export class Arch extends Base {
     g.drawImage(this.grain, 0, 0, this.w, this.h);
     g.strokeStyle = `rgba(244,244,246,${0.18 + 0.25 * this.light})`; g.lineWidth = 1;
     for (const [a, b] of this.links) { const p = this.stars[a], q = this.stars[b]; g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(q.x, q.y); g.stroke(); }
+    // each star's twinkle through globalAlpha: the same pixels as an rgba() per star, without 320 colour strings a frame
+    g.fillStyle = 'rgb(244,244,246)';
     for (const s of this.stars) {
-      g.fillStyle = `rgba(244,244,246,${(0.25 + 0.75 * (0.5 + 0.5 * Math.sin(t * s.f + s.p))) * L})`;
+      g.globalAlpha = (0.25 + 0.75 * (0.5 + 0.5 * Math.sin(t * s.f + s.p))) * L;
       g.fillRect(s.x, s.y, s.r, s.r);
     }
+    g.globalAlpha = 1;
     for (const s of this.sparks) {
       const k = (0.6 + 0.4 * Math.sin(t * 0.9 + s.p)) * L, r = s.s * k;
       g.fillStyle = `rgba(244,244,246,${0.5 + 0.5 * k})`;

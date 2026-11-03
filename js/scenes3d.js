@@ -33,6 +33,8 @@ class S3 {
     this.r = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true, powerPreference: 'high-performance' });
     this.r.setClearColor(0x000000, 0);
     this.r.outputColorSpace = THREE.SRGBColorSpace;
+    // asking for each shader's log makes the page wait for the driver to finish compiling it, mid-frame
+    this.r.debug.checkShaderErrors = false;
     this.scene = new THREE.Scene();
     this.cam = new THREE.PerspectiveCamera(o.fov || 32, 1, 0.05, 400);
     this.yaw = 0; this.pitch = 0; this.vyaw = 0; this.vpitch = 0;
@@ -69,6 +71,13 @@ class S3 {
     this.pitch *= Math.pow(0.4, dt);
   }
   render() { this.r.render(this.scene, this.cam); }
+  // hand every material in the scene to the driver now, so nothing stalls the frame where it first comes into view;
+  // things that are hidden are shown for the compile only (no frame is drawn in between)
+  warm() {
+    const hidden = [];
+    this.scene.traverse((o) => { if (!o.visible) { hidden.push(o); o.visible = true; } });
+    try { this.r.compile(this.scene, this.cam); } finally { hidden.forEach((o) => (o.visible = false)); }
+  }
   destroy() {
     this.scene.traverse((o) => {
       if (o.geometry) o.geometry.dispose();
@@ -399,7 +408,11 @@ export class Worlds extends S3 {
     const order = [...this.planets].sort((a, b) => a.sy - b.sy), placed = [];
     order.forEach((p) => {
       let y = p.sy - 10;
-      const w = p.lab.offsetWidth || 220, x = p.sx + 26 + w > this.w - 40 ? p.sx - 26 - w : p.sx + 26;   // names near the right edge go on the left
+      // a label's width only changes with its text (the language): measured then, not every frame, since reading it
+      // between the style writes below would make the browser lay the page out again for each label
+      const txt = p.lab.textContent;
+      if (p.labTxt !== txt || !p.labW) { p.labW = p.lab.offsetWidth; p.labTxt = txt; }
+      const w = p.labW || 220, x = p.sx + 26 + w > this.w - 40 ? p.sx - 26 - w : p.sx + 26;   // names near the right edge go on the left
       for (const q of placed) if (Math.abs(q.x - x) < Math.max(w, q.w) && Math.abs(q.y - y) < 24) y = q.y + 24;
       placed.push({ x, y, w });
       p.lab.style.transform = `translate(${x}px, ${y}px)`;
@@ -511,6 +524,7 @@ export class Totem extends S3 {
     this.geo.setAttribute('color', new THREE.BufferAttribute(this.col, 3));
     this.lines = new THREE.LineSegments(this.geo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
     this.lines.frustumCulled = false;   // the tower keeps growing upwards; a bounding sphere from the first frame would cull it
+    this.geo.setDrawRange(0, 0);
     this.scene.add(this.lines);
     this.count = 0; this.acc = 0;
     this.bands = new Float32Array(40);
@@ -545,25 +559,29 @@ export class Totem extends S3 {
     }
   }
   draw(A, t, dt) {
+    const { N, M } = this;
     this.acc += dt;
+    // the tower only changes when a ring is added: then the new ring goes up to the GPU, and the colours (every ring
+    // dims a step as it ages); between rings nothing is uploaded
     if (this.acc > 0.09 && A.bands.rms > 0.003) {
       this.acc = 0;
       A.logBands(this.bands.length, 30, 12000, this.bands);
-      const idx = this.count % this.N;
+      const idx = this.count % N;
       this.top = this.count * this.dy;
       this.ring(idx, this.top, this.bands);
       this.count++;
+      const n = Math.min(this.count, N);
+      for (let i = 0; i < n; i++) {
+        const age = (this.count - 1 - i + N) % N, f = Math.pow(1 - age / N, 1.6), e = Math.min(1, this.energy[i] * 3);
+        const P = Totem.PALS[this.pal[i]], r = (P[0] + e * P[1]) * f, g = (P[2] + (1 - e) * P[3]) * f, b = (P[4] + (1 - e) * P[5]) * f;
+        const base = i * M * 2 * 3;
+        for (let j = 0; j < M * 2; j++) { const o = base + j * 3; this.col[o] = r; this.col[o + 1] = g; this.col[o + 2] = b; }
+      }
+      const P = this.geo.attributes.position, Cl = this.geo.attributes.color;
+      P.clearUpdateRanges(); P.addUpdateRange(idx * M * 2 * 3, M * 2 * 3); P.needsUpdate = true;
+      Cl.clearUpdateRanges(); Cl.addUpdateRange(0, n * M * 2 * 3); Cl.needsUpdate = true;
+      this.geo.setDrawRange(0, n * M * 2);
     }
-    const { N, M } = this;
-    for (let i = 0; i < Math.min(this.count, N); i++) {
-      const age = (this.count - 1 - i + N) % N, f = Math.pow(1 - age / N, 1.6), e = Math.min(1, this.energy[i] * 3);
-      const P = Totem.PALS[this.pal[i]], r = (P[0] + e * P[1]) * f, g = (P[2] + (1 - e) * P[3]) * f, b = (P[4] + (1 - e) * P[5]) * f;
-      const base = i * M * 2 * 3;
-      for (let j = 0; j < M * 2; j++) { const o = base + j * 3; this.col[o] = r; this.col[o + 1] = g; this.col[o + 2] = b; }
-    }
-    this.geo.attributes.position.needsUpdate = true;
-    this.geo.attributes.color.needsUpdate = true;
-    this.geo.setDrawRange(0, Math.min(this.count, N) * M * 2);
     this.inertia(dt);
     // every section is a new camera: a cut, not a move
     const L = this.look, a = t * L.spin + this.yaw + this.sec * 1.9, cy = this.top;
@@ -888,15 +906,18 @@ void main() {
   float drip = pow(ns(vec2(p.x * 0.07, 3.0)), 9.0) * smoothstep(0.1, 0.7, dir.y) * 320.0 * smoothstep(0.0, 900.0, uR);
   float R = uR * (0.3 + 2.2 * fing * fing * fing) + drip;
   float inside = smoothstep(R + 2.0, R - 2.0, rw);
-  // tendrils run out ahead of it: they reach things first
-  float tend = ridge(dir * 9.0 + w * 0.9 + r * 0.0011, 30.0);
-  float ahead = smoothstep(R * 1.6 + 60.0, R, rw) * (1.0 - inside);
-  float va = tend * ahead;
   // the skin: lumpy, with a raised lip at its edge, wet: a hard highlight and oily colours in it
   float lump = ns(p * 0.0045 + vec2(0.0, uTime * 0.12)) * 0.65 + ns(p * 0.011 - vec2(uTime * 0.07, 0.0)) * 0.35;
   float lip = smoothstep(R - 60.0, R - 2.0, rw) * inside;
   float hgt = inside * (0.4 + 0.6 * lump) + lip * 0.7;
   vec3 n = normalize(vec3(-dFdx(hgt) * 55.0, dFdy(hgt) * 55.0, 1.0));
+  // beyond the reach of its tendrils and its shadow nothing of it shows (alpha 0): the rest is not worked out there.
+  // (after the derivatives above, which need every pixel of the 2 x 2 block)
+  if (rw >= R * 1.6 + 60.0) { gl_FragColor = vec4(0.0); return; }
+  // tendrils run out ahead of it: they reach things first
+  float tend = ridge(dir * 9.0 + w * 0.9 + r * 0.0011, 30.0);
+  float ahead = smoothstep(R * 1.6 + 60.0, R, rw) * (1.0 - inside);
+  float va = tend * ahead;
   vec3 H = normalize(vec3(-0.45, 0.55, 0.7) + vec3(0.0, 0.0, 1.0));
   float spec = pow(max(dot(n, H), 0.0), 75.0);
   vec3 film = 0.5 + 0.5 * cos(6.2832 * (vec3(0.0, 0.33, 0.67) + n.x * 2.0 + n.y * 1.3 + lump * 1.7));
@@ -943,7 +964,7 @@ class Collage {
     this.wedgeIn = 0;
     // paper stickers pasted over the monuments' faces, like masks: each picture twice at most
     this.stickers = STICKERS.flatMap((n) => [n, n]).map((n) => {
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: this.tex[n], color: 0xd9d2c6, transparent: true, side: THREE.DoubleSide, depthWrite: false }));
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: this.tex[n], color: 0xd9d2c6, transparent: true, side: THREE.DoubleSide, forceSinglePass: true, depthWrite: false }));
       m.matrixAutoUpdate = false; m.userData = { name: n, slot: null, roll: 0 };
       return this.add(m);
     });
@@ -988,9 +1009,11 @@ class Collage {
     const g = new THREE.PlaneGeometry(1, 1);
     if (o.anchor === 'tip') g.translate(-0.5, 0.5, 0);   // the wedge hangs from its point, at the bottom right
     else if (o.anchor !== 'centre') g.translate(0, 0.5, 0);
+    // a flat sheet shows one face at a time, so one pass draws it: without forceSinglePass three.js draws a transparent
+    // double-sided material twice a frame (back, then front) and re-checks its shader for each pass
     const mat = o.flat
-      ? new THREE.MeshBasicMaterial({ map: this.tex[name], transparent: true, side: THREE.DoubleSide, depthWrite: false })
-      : new THREE.MeshLambertMaterial({ map: this.tex[name], transparent: true, alphaTest: 0.3, side: THREE.DoubleSide });
+      ? new THREE.MeshBasicMaterial({ map: this.tex[name], transparent: true, side: THREE.DoubleSide, forceSinglePass: true, depthWrite: false })
+      : new THREE.MeshLambertMaterial({ map: this.tex[name], transparent: true, alphaTest: 0.3, side: THREE.DoubleSide, forceSinglePass: true });
     const m = new THREE.Mesh(g, mat);
     m.userData = { name, h };
     return this.add(m);
@@ -1079,14 +1102,14 @@ class Collage {
       if (pro.material.map !== this.tex.prokofiev) { pro.material.map = this.tex.prokofiev; pro.material.needsUpdate = true; }
       pro.material.color.setScalar(1 + 0.8 * Math.max(0, 1 - (t - (this.hall.fx.flash ?? -9)) / 0.05));
     }
-    // page 116 comes down from the fourth part on, and hangs in the air through the silence
+    // page 116 comes down once, from the fourth part on (and hangs in the air if the silence catches it); once it is
+    // past the floor it is gone
     const ob = this.obit, os = this.obitS;
-    ob.visible = sec >= 3;
+    ob.visible = sec >= 3 && os.y > -1.8;
     if (ob.visible && !this.paperDone) { const im = this.tex['prokofiev-obit'].image; if (im && im.width) { this.drawPaper(im); this.paperTex.needsUpdate = true; this.paperDone = true; } }
     if (ob.visible && !still) {
       os.y -= dt * 0.3; os.r += dt;
       os.x = Math.max(0.5, Math.min(1.05, os.x + Math.sin(t * 0.9) * dt * 0.35));
-      if (os.y < -1.8) { os.y = 3.4; os.x = 0.55 + Math.random() * 0.4; }
     }
     ob.position.set(os.x, os.y, os.z);
     ob.rotation.set(Math.sin(os.r * 1.3) * 0.9, os.r * 0.7, Math.sin(os.r) * 0.5);
@@ -1195,7 +1218,7 @@ class Collage {
       this.local.compose(this.lv.set(-0.034, 0.35, 0.172), this.lq, this.ls.set(h * im.width / im.height, h / (s.sy || 1), 1));
       m.matrix.multiplyMatrices(s.m, this.local);
     });
-    // 3:41: the blast takes the collage too, out from the clock and spinning, until the light goes
+    // 3:41: the blast takes the collage too, out from the clock, until the light goes
     const tb = t - H.boomT;
     if (tb >= 0 && tb < 0.38) {
       const k = 1 - Math.exp(-9 * tb);
@@ -1203,7 +1226,6 @@ class Collage {
         if (!m.visible) continue;
         const dx = m.position.x - H.C.x, dy = m.position.y - H.C.y, dl = Math.hypot(dx, dy) || 1;
         m.position.x += (dx / dl) * 2.5 * k; m.position.y += (dy / dl) * 1.8 * k + 0.6 * k; m.position.z += 1.2 * k;
-        m.rotation.z += k * 2.4 * (dx < 0 ? 1 : -1);
       }
       wd.rotation.z = k * 0.9;
     }
@@ -1353,6 +1375,7 @@ export class Monument extends S3 {
     this.drift = inst(clockLo, kmc, this.driftN);
     this.driftS = Array.from({ length: 14 }, (_, i) => ({ x: (rnd(i * 3) - 0.3) * 9, y: rnd(i * 7) * 6 - 2, z: -4 - rnd(i * 11) * 14, r: rnd(i * 19) * 6 }));
     this.ready = true;
+    this.warm();
   }
   // things come down out of the dark, never quite together and never quite the same: each has its own height,
   // weight and delay, turns over on the way, and lands where it lands — mostly upright, some crooked, some on

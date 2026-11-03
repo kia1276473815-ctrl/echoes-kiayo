@@ -204,7 +204,7 @@ export class Wall {
     return (0.04 + Math.random() * 0.12) * (1 - 0.6 * this.R) * (L.w * L.h > 250000 ? 1.8 : 1);
   }
   piece(x, y, w, h, now, o = {}) {
-    const L = { x, y, w, h, rot: 0, spin: 0, warp: null, img: this.pick(), sw: now, born: now, mode: MODES[Math.floor(Math.random() * MODES.length)], seed: Math.random() * 100, g: 0, ...o };
+    const L = { x, y, w, h, rot: 0, warp: null, img: this.pick(), sw: now, born: now, mode: MODES[Math.floor(Math.random() * MODES.length)], seed: Math.random() * 100, g: 0, ...o };
     L.prev = L.prev ?? L.img;
     L.crop = L.crop || this.crop(w, h);
     L.next = now + this.life(L);
@@ -246,14 +246,14 @@ export class Wall {
     });
     this.leaves.splice(i, 1, ...kids);
   }
-  // a picture slapped over the rest: any size, crooked, more and more often pulled out of shape or spinning
+  // a picture slapped over the rest: any size, crooked, more and more often pulled out of shape
   paste(now) {
     if (this.floats.length >= this.floatCap) this.floats.shift();
     const w = 90 * Math.pow(10, Math.random()), h = w * (0.55 + Math.random() * 1.25), R = this.R;
     const tilt = Math.random() < 0.18 + 0.3 * R ? (Math.random() < 0.5 ? -1 : 1) * (0.3 + Math.random() * 0.6) : (Math.random() - 0.5) * 0.24;
     const k = 0.08 + 0.4 * R, warp = Math.random() < 0.3 + 0.5 * R ? Array.from({ length: 4 }, () => [(Math.random() - 0.5) * k * w, (Math.random() - 0.5) * k * h]) : null;
     const F = this.piece(Math.random() * 2000 - 40 - w / 2, Math.random() * 1160 - 40 - h / 2, w, h, now, {
-      rot: tilt, warp, spin: Math.random() < 0.12 + 0.3 * R ? (Math.random() - 0.5) * 14 : 0, pasted: true,
+      rot: tilt, warp, pasted: true,
     });
     F.die = now + (0.12 + Math.random() * 1.1) * (1 - 0.5 * R);
     this.floats.push(F);
@@ -312,7 +312,6 @@ export class Wall {
     if (Math.random() < dt * (14 + 30 * R)) this.split(this.leaves[Math.floor(Math.random() * this.leaves.length)], t);
     if (this.floats.length < Math.min(this.floatCap, 8 + tw * 2.5 + R * 40) && Math.random() < dt * (30 + 60 * R)) this.paste(t);
     this.floats = this.floats.filter((F) => F.die > t);
-    for (const F of this.floats) F.rot += F.spin * dt;
     this.flash = Math.max(0, this.flash - dt * 10);
     // every piece changes picture every few frames (at the end every frame), tearing as it does
     const gBase = 0.3 + Math.min(0.3, tw * 0.02) + 0.3 * R;

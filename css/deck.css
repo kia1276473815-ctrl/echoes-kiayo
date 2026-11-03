@@ -242,6 +242,11 @@ body.idle #fs:not(.show) { opacity: 0; pointer-events: none; }
 .list-item .n { font: 300 40px/1 var(--serif); color: var(--ink-2); padding-top: 2px; }
 .list-item h3 { font: 400 40px/1.25 var(--serif); letter-spacing: -.01em; margin-bottom: 12px; color: var(--ink); }
 .list-item p { font: 400 24px/1.72 var(--sans); color: var(--ink-2); }
+/* am-lessons: the three lessons step down to the right of the heading, like stairs */
+.stair { left: 760px; top: 250px; width: 1060px; }
+.stair .list-item { width: 880px; }
+.stair .list-item:nth-child(2) { margin-left: 80px; }
+.stair .list-item:nth-child(3) { margin-left: 160px; border-bottom: 1px solid var(--rule); }
 
 .range { -webkit-appearance: none; appearance: none; width: 100%; height: 2px; background: var(--rule); outline: none; cursor: pointer; }
 .range::-webkit-slider-thumb { -webkit-appearance: none; width: 26px; height: 26px; border-radius: 50%; background: var(--ink); border: 6px solid color-mix(in srgb, var(--ink) 0%, var(--night)); box-shadow: 0 0 0 1px var(--ink); }
@@ -313,8 +318,7 @@ body.idle #fs:not(.show) { opacity: 0; pointer-events: none; }
 .flash { position: absolute; inset: 0; background: #F2EFEA; opacity: 0; pointer-events: none; z-index: 5; mix-blend-mode: screen; }
 .disc { position: absolute; left: 1190px; top: 330px; width: 420px; height: 420px; border-radius: 50%; background: var(--me); opacity: 0; transform: scale(.4); transition: opacity .9s var(--out), transform 1.2s var(--out); pointer-events: none; }
 .slide.disc-on .disc { opacity: 1; transform: scale(1); }
-.wedge, #cv-spiral { transform-origin: 1400px 540px; transition: rotate .9s var(--io); }
-#cv-spiral { transform-origin: 50% 50%; }
+.wedge { transform-origin: 1400px 540px; transition: rotate .9s var(--io); }
 /* the build-up toward 3:41: a red dark closing in from the edges */
 .tension { position: absolute; inset: 0; pointer-events: none; z-index: 3; opacity: 0; background: radial-gradient(ellipse at 1400px 540px, rgba(0,0,0,0) 34%, rgba(110,8,8,.32) 68%, rgba(30,0,0,.88) 100%); }
 #cv-monument { z-index: 5; pointer-events: none; }
@@ -326,7 +330,6 @@ body.idle #fs:not(.show) { opacity: 0; pointer-events: none; }
 .strobe { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 8; }
 .drain { position: absolute; inset: 0; background: #000; opacity: 0; pointer-events: none; transition: opacity 1.8s var(--soft); z-index: 4; }
 .slide.draining .drain { opacity: .3; }   /* the venom does the rest */
-.slide.draining #cv-spiral { z-index: 5; }   /* the last orange stays lit above the dark */
 /* 3:41 — the world turns over. Only the paper (the 2D layers) is inverted, each on its own: the 3D hall is never
    put through a filter, which would cost a full-screen pass on every frame */
 .slide.absurd { background: #f9f9f9; animation: sway 4.4s ease-in-out infinite; }
@@ -344,7 +347,7 @@ svg.defs { position: absolute; width: 0; height: 0; }
 /* after 3:41 the hall is a black void beside the white paper */
 .void { position: absolute; inset: 0; z-index: 5; pointer-events: none; opacity: 0; background: linear-gradient(90deg, rgba(5,5,5,0) 38%, #050505 54%); }
 .slide.absurd .void { opacity: 1; }
-.slide.absurd .wedge, .slide.absurd #cv-spiral { transition: rotate .18s cubic-bezier(.2, 1.6, .4, 1); }
+.slide.absurd .wedge { transition: rotate .18s cubic-bezier(.2, 1.6, .4, 1); }
 .rd { transition: background-color 60ms linear, color 60ms linear; border-radius: 1px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 .rd.on { background: var(--ink); color: transparent; }
 .soviet .sl { display: inline-block; font-style: normal; transition: transform .22s cubic-bezier(.2, 1.6, .4, 1); }

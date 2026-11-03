@@ -1,4 +1,4 @@
-import { Engine } from './audio.js';
+import { Engine, measure } from './audio.js';
 import { setRenderScale } from './viz.js';
 import { set3DScale, warmImages, warmModels } from './scenes3d.js';
 import { SLIDES } from './slides.js';
@@ -417,14 +417,12 @@ const prev = () => {
 // ---------------------------------------------------------------- loading + gate
 const GATE = { done: 0, n: 5 };
 let loaded = false;
-const gateMsg = () => { $('#gate-status').textContent = loaded ? (GATE.failed ? `${t('음악을 불러오지 못함')} (${GATE.failed} / ${GATE.n}) · ${t('Chrome으로 열어 주세요')}` : t('준비됨')) : `${t('불러오는 중')} ${GATE.done} / ${GATE.n}`; };
+const gateMsg = () => { $('#gate-status').textContent = loaded && GATE.failed ? `${t('음악을 불러오지 못함')} (${GATE.failed} / ${GATE.n}) · ${t('Chrome으로 열어 주세요')}` : ''; };
 async function loadAll() {
   const jobs = ['totem', '114514', 'sub', 'fp-promises-m1', 'fp-silhouettes'];
-  const upd = () => { gateMsg(); $('#gate-bar').style.width = (GATE.done / GATE.n) * 100 + '%'; };
-  upd();
   // count what failed to decode, so a silent deck says so on the gate instead of starting mute
   let failed = 0;
-  await Promise.all(jobs.map((k) => eng.need(k).then((b) => { if (!b) failed++; GATE.done++; upd(); })));
+  await Promise.all(jobs.map((k) => eng.need(k).then((b) => { if (!b) failed++; GATE.done++; })));
   GATE.failed = failed;
   // the stamps are drawn on a canvas: their face has to be ready before the first one comes down
   await Promise.all(['900 40px CyrBlack', '400 20px ZhSans', '300 40px ZhSerif'].map((f) => document.fonts.load(f, 'ПР中').catch(() => {})));
@@ -432,11 +430,15 @@ async function loadAll() {
   // warm the Chinese faces so switching language does not wait for them
   ['300 40px ZhSerif', '400 20px ZhSans'].forEach((f) => document.fonts.load(f, '中').catch(() => {}));
   loaded = true;
+  document.body.dataset.ready = '1';
   gateMsg();
-  $('#gate-go').style.opacity = 1;
+  if (wanted) start();
 }
+// a tap before everything has loaded is remembered, and the deck starts the moment it is ready
+let wanted = false;
 async function start() {
-  if (started || !loaded) return;
+  if (started) return;
+  if (!loaded) { wanted = true; return; }
   started = true;
   // phones: go full screen and stay sideways where the browser allows it
   if (touch) {
@@ -505,11 +507,6 @@ document.body.classList.add('idle');
 const touch = matchMedia('(pointer: coarse)').matches;
 if (touch) {
   document.body.classList.add('touch');
-  const go0 = $('#gate-go');
-  go0.dataset.i18n = 'js';
-  const tap = () => (go0.textContent = t('화면을 눌러 시작'));
-  tap();
-  addEventListener('deck-lang', tap);
 }
 document.querySelectorAll('#navtouch button').forEach((b) => {
   b.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -553,7 +550,7 @@ addEventListener('pointermove', () => {
 const HINTS = {
   'fp-albums': '1–6 또는 커버 클릭 — 앨범 전환', 'fp-score': '악장 막대 클릭 — 설명', 'fp-mortals': 'O — 항아리 열기',
   'am-worlds': '행성 클릭 — 확대·재생 / 빈 곳 클릭 — 전체로', 'am-ill': '슬라이더를 천천히 오른쪽으로',
-  'side-c': '드래그 — 회전 · 1 / 2 또는 곡 클릭 — 그 곡 듣기', 'me-totem': 'K — 재생/정지 · C — 클라베 · 파형 클릭 — 이동', 'me-114514': 'K — 재생/정지 · 나선 클릭 — 이동',
+  'side-c': '드래그 — 회전 · 1 / 2 또는 곡 클릭 — 그 곡 듣기', 'me-totem': 'K — 재생/정지 · 파형 클릭 — 이동', 'me-114514': 'K — 재생/정지',
   coda: '끝난 뒤 Space — 마지막 소리 다시',
 };
 function broadcast() {
@@ -587,7 +584,11 @@ addEventListener('message', (e) => { if (pw && e.source === pw) onLink(e); });
 const np = $('#np'), npc = $('#np-wave'), npg = npc.getContext('2d');
 const NP_HIDE = new Set(['gate', 'cold', 'coda', 'inter2', 'fp-albums', 'am-worlds', 'me-totem', 'me-114514']);   // the album pages show what is playing themselves
 let npKey = null;
+// the stylesheet can switch the strip off for good; then it is never drawn (reading its colour every frame costs a
+// style recalculation)
+let npOff = null;
 function drawNowPlaying() {
+  if (npOff ?? (npOff = getComputedStyle(np).display === 'none')) return;
   const key = eng.bed ? eng.bedKey : null, el = slides[idx];
   const show = key && el && !NP_HIDE.has(el.dataset.id);
   np.classList.toggle('on', !!show);
@@ -670,7 +671,8 @@ function loop(now) {
   if (idx >= 0 && fsEl.dataset.theme !== slides[idx].dataset.theme) fsEl.dataset.theme = slides[idx].dataset.theme;
   if (cur) {
     for (const c of cur.comps) { try { c.draw(eng, t, dt); } catch (e) { console.error(e); cur.comps.splice(cur.comps.indexOf(c), 1); } }
-    if (cur.B.frame) cur.B.frame(cur, eng, t, dt);
+    // a page that throws must not stop the loop: everything after it would freeze
+    if (cur.B.frame) { try { cur.B.frame(cur, eng, t, dt); } catch (e) { console.error('frame', e); } }
     if (started && liveEcho(cur.el)) echoLive(cur.el, dt, now);
   }
   requestAnimationFrame(loop);
@@ -696,4 +698,4 @@ go(0);
 langUI();
 loadAll();
 requestAnimationFrame(loop);
-window.__deck = { eng, medium, mediumFor, go: (i, d) => go(i, d), next: () => next(), prev: () => prev(), get busy() { return busy; }, get idx() { return idx; }, get cur() { return cur; }, slides, start, relang };
+window.__deck = { eng, medium, mediumFor, go: (i, d) => go(i, d), next: () => next(), prev: () => prev(), get busy() { return busy; }, get idx() { return idx; }, get cur() { return cur; }, slides, start, relang, measure };

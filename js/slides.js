@@ -1,7 +1,7 @@
 // Per-slide behaviour. S (from main.js): el, q(), eng, add(), later(), every(), t, toStage(), state
-import { Raster, InkLine, Sand, Score, Layers, Stave, Blast, Arch, Flock, Spin, Spectrogram, LowVsHigh, Scrub, Spiral, Coda, Picado, Clave, Page116, C, rgba, fmt, clamp } from './viz.js';
+import { Raster, InkLine, Sand, Score, Layers, Stave, Blast, Arch, Flock, Spectrogram, Scrub, Coda, Picado, Page116, fmt, clamp } from './viz.js';
 import { Vinyl, Jar, Worlds, Wave, Totem, Leviathan, Monument, COLLAGE } from './scenes3d.js';
-import { MINE, PREVIEWS, PAIRS, FP_ALBUMS, AM_WORLDS, PROMISES, PRESENTER, WHALE_IMPACTS } from './config.js';
+import { MINE, PREVIEWS, FP_ALBUMS, AM_WORLDS, PROMISES, PRESENTER, WHALE_IMPACTS } from './config.js';
 import { t } from './i18n.js';
 import { asset } from './assets.js';
 import { Wall } from './wall.js';
@@ -30,8 +30,6 @@ const mk = (tag, cls, css, html) => { const d = document.createElement(tag); d.c
     rail.appendChild(d);
   });
 }
-const stage = () => document.getElementById('stage');
-
 // strongest note onset within 1.3 s of each target time (envelope hop = 10 ms)
 function motifOnsets(env, targets) {
   const on = new Float32Array(env.length);
@@ -44,19 +42,6 @@ function motifOnsets(env, targets) {
     let best = Math.round(t * 100), bv = 0;
     for (let i = Math.max(0, Math.round((t - 1.3) * 100)); i < Math.min(on.length, Math.round((t + 1.3) * 100)); i++) if (on[i] > bv) { bv = on[i]; best = i; }
     return best / 100;
-  });
-}
-
-// a woodblock: two short partials, scheduled `dt` seconds ahead
-function woodblock(eng, dt) {
-  const c = eng.ctx, t = c.currentTime + Math.max(0, dt);
-  [[2550, 0.16], [1720, 0.07]].forEach(([f, g0]) => {
-    const o = c.createOscillator(), g = c.createGain();
-    o.frequency.value = f;
-    g.gain.setValueAtTime(g0, t);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.07);
-    o.connect(g).connect(eng.fxBus);
-    o.start(t); o.stop(t + 0.09);
   });
 }
 
@@ -168,6 +153,15 @@ export const SLIDES = {
       const wave = (S.state.wave = S.add(new Wave(S.q('#cv-wave'))));
       S.state.crest = S.q('#me-crest');
       S.state.cards = [S.q('#src-fp'), S.q('#src-am')];
+      // the cards' sizes change only with their content (a song playing, the language): the browser reports them, so the
+      // frame never has to ask for them (asking after last frame's moves would make it lay the page out again)
+      const cards = S.state.cards;
+      S.state.size = cards.map((c) => [c.offsetWidth, c.offsetHeight]);
+      S.state.ro = new ResizeObserver((es) => es.forEach((e) => {
+        const b = e.borderBoxSize && e.borderBoxSize[0];
+        S.state.size[cards.indexOf(e.target)] = b ? [Math.round(b.inlineSize), Math.round(b.blockSize)] : [e.target.offsetWidth, e.target.offsetHeight];
+      }));
+      cards.forEach((c) => S.state.ro.observe(c));
       const songs = S.state.cards.map((c) => c.querySelector('.meet-song'));
       songs.forEach((el) => el.classList.remove('playing'));
       S.state.play = (k) => {
@@ -183,10 +177,11 @@ export const SLIDES = {
     // each label rides on its source
     frame(S) {
       const P = S.state.wave.pinXY, R = [], [cx, cy] = S.state.wave.crestXY;
+      const size = S.state.size;
       S.state.crest.style.translate = `${(cx - 115).toFixed(1)}px ${(cy - 115).toFixed(1)}px`;
       S.state.cards.forEach((c, k) => {
         // Floating Points opens to the left of its source, so its label never lies under the crest between them
-        const w = c.offsetWidth, h = c.offsetHeight, [x, y] = P[k], flip = k === 0 ? x - w > 20 : x + w > 1880;
+        const [w, h] = size[k], [x, y] = P[k], flip = k === 0 ? x - w > 20 : x + w > 1880;
         c.classList.toggle('flip', flip);
         const left = Math.max(20, Math.min(1900 - w, flip ? x - w : x));
         let top = Math.max(20, Math.min(1060 - h, y - 14));
@@ -198,6 +193,7 @@ export const SLIDES = {
       });
     },
     key(S, e) { if (e.key === '1' || e.key === '2') { S.state.play(+e.key - 1); return true; } },
+    leave(S) { if (S.state.ro) S.state.ro.disconnect(); },
   },
 
   'fp-hero': {
@@ -562,30 +558,12 @@ export const SLIDES = {
       const markers = MINE.totem.markers.length ? MINE.totem.markers : sec ? sec.slice(1).map((at, i) => ({ t: at, label: roman[i + 1] })) : S.eng.autoMarkers('totem');
       S.add(new Scrub(S.q('#cv-totem-scrub'), { peaks: S.eng.getPeaks('totem', 700), duration: buf.duration, markers, getPos: () => S.eng.bedPos('totem'), onSeek: (t) => b.seek(S, t) }));
     });
-    const enter = b.enter, key = b.key;
+    const enter = b.enter;
     b.enter = function (S) {
       enter.call(b, S);
       S.state.tower = S.add(new Totem(S.q('#cv-totem')));
       S.state.flags = S.add(new Picado(S.q('#cv-picado'), { x0: 600 }));
       S.state.sec = -1;
-      S.state.clave = false;
-      const btn = S.q('#totem-clave');
-      btn.classList.remove('on');
-      S.state.toggleClave = () => { S.state.clave = !S.state.clave; btn.classList.toggle('on', S.state.clave); };
-      btn.onclick = S.state.toggleClave;
-      S.eng.need('totem').then((buf) => {
-        if (!buf || !S.alive) return;
-        const A = S.eng.analyze('totem');
-        S.add(new Clave(S.q('#cv-clave'), {
-          bpm: MINE.totem.bpm || A.bpm, phase: MINE.totem.bpm ? 0 : A.phase,
-          getPos: () => S.eng.bedPos('totem'), playing: () => S.eng.bedKey === 'totem',
-          sound: () => S.state.clave, onHit: (dt) => woodblock(S.eng, dt),
-        }));
-      });
-    };
-    b.key = function (S, e) {
-      if (e.key === 'c' || e.key === 'C') { S.state.toggleClave(); return true; }
-      return key.call(b, S, e);
     };
     const frame = b.frame;
     b.frame = function (S, A, t, dt) {
@@ -601,7 +579,7 @@ export const SLIDES = {
       S.state.flags.gust(i === sec.length - 1 ? 0.4 : 1);
       S.q('.flash').animate([{ opacity: 0.4 }, { opacity: 0 }], { duration: 650, easing: 'cubic-bezier(.23,1,.32,1)' });
     };
-    b.notes = '제 곡 Totem이에요. Alon Mor처럼 무거운 전자음을 깔고 라틴 음악을 섞었어요. 위에 걸린 건 멕시코 종이 장식 파펠 피카도고요, 왼쪽 아래 점들은 라틴 음악 기본 리듬인 클라베 3-2예요. C를 누르면 클라베 소리가 곡에 맞춰 같이 나와요. 오른쪽 탑은 곡의 순간순간을 고리로 만들어 쌓은 거예요. 곡의 구간이 바뀔 때마다 카메라, 색, 고리 모양이 한꺼번에 바뀌어서, 다 쌓인 탑을 보면 곡의 구조가 층으로 남아요.';
+    b.notes = '제 곡 Totem이에요. Alon Mor처럼 무거운 전자음을 깔고 라틴 음악을 섞었어요. 위에 걸린 건 멕시코 종이 장식 파펠 피카도예요. 오른쪽 탑은 곡의 순간순간을 고리로 만들어 쌓은 거예요. 곡의 구간이 바뀔 때마다 카메라, 색, 고리 모양이 한꺼번에 바뀌어서, 다 쌓인 탑을 보면 곡의 구조가 층으로 남아요.';
     return b;
   })(),
 
@@ -609,8 +587,8 @@ export const SLIDES = {
     const b = myTrack('114514', 'spiral', (S, buf) => {
       const given = MINE['114514'].bpm, bpm = given || S.eng.analyze('114514').bpm;
       S.q('#spiral-meta').textContent = `${MINE['114514'].meta} · ${given ? `${given} BPM` : t('약 {bpm} BPM (자동 추정)').replace('{bpm}', Math.round(bpm))}`;
-      const sp = S.add(new Spiral(S.q('#cv-spiral'), { peaks: S.eng.getPeaks('114514', 2400), duration: buf.duration, revolution: (MINE['114514'].bpm ? 48 : 32) * 60 / bpm, getPos: () => S.eng.bedPos('114514'), onSeek: (at) => b.seek(S, at) }));
-      S.state.sp = sp;
+      // the clock's hand goes round once every 8 bars
+      const rev = (MINE['114514'].bpm ? 48 : 32) * 60 / bpm;
       // where the song is as it is HEARD: the position less the time the sound still takes to reach the speakers
       const heard = (S.state.heard = () => S.eng.bedPos('114514') - (S.eng.ctx.outputLatency || S.eng.ctx.baseLatency || 0));
       // what of the track sounded since the last frame (js/pro-events.js), handed to the hall before it is drawn so
@@ -629,7 +607,7 @@ export const SLIDES = {
       };
       // the monument hall: a clock, busts and gas masks (scans), all on the beat
       S.state.mon = S.add(new Monument(S.q('#cv-monument'), {
-        state: () => ({ phase: S.state.st || 's0', a: (S.eng.bedPos('114514') / sp.rev) * Math.PI * 2 - Math.PI / 2, T: S.state.T || 0, tick: S.state.tick, kicks: S.state.kicks, kickHit: S.state.kickHit }),
+        state: () => ({ phase: S.state.st || 's0', a: (S.eng.bedPos('114514') / rev) * Math.PI * 2 - Math.PI / 2, T: S.state.T || 0, tick: S.state.tick, kicks: S.state.kicks, kickHit: S.state.kickHit }),
         onTick: () => S.eng.noiseHit({ f0: 4200, f1: 2600, dur: 0.03, attack: 0.001, gain: 0.08 }),
         // under the wall it is only seen through holes; after 3:58 not at all
         hidden: () => (S.el.classList.contains('hush') ? 2 : S.state.wall && S.state.wall.covered ? 1 : 0),
@@ -662,8 +640,8 @@ export const SLIDES = {
     };
     b.frame = function (S, A, t, dt) {
       frame.call(b, S, A, t, dt);
-      const sp = S.state.sp, mon = S.state.mon;
-      if (!sp || !mon) return;
+      const mon = S.state.mon;
+      if (!mon) return;
       const P = MINE['114514'], pos = S.eng.bedPos('114514'), playing = S.eng.bedKey === '114514';
       let st;
       if (S.eng.bedKey === '114514' && S.eng.bed && S.eng.bed.ended) st = 'end';
@@ -671,13 +649,12 @@ export const SLIDES = {
       else if (pos >= P.twist) st = 'twist';
       else if (pos >= P.drain) st = 'drain';
       else { let i = 0; P.sections.forEach((at, k) => { if (pos >= at) i = k; }); st = 's' + i; }
-      if (st !== S.state.st) { const prev = S.state.st; S.state.st = st; this.look(S, sp, st, prev); }
+      if (st !== S.state.st) { const prev = S.state.st; S.state.st = st; this.look(S, st, prev); }
       // before the silence the beats are known (js/pro-events.js, read out this frame by the hall): the page moves
       // exactly with them; after it, by ear
       const ev = S.state.ev || { hits: [], clicks: [] }, hits = ev.hits, clicks = ev.clicks;
       S.state.ev = null;
       const kick = pos < P.drain ? hits.length > 0 : playing && A.bands.kick === 1 && t - (S.state.lastKick || 0) > 0.15;
-      const hard = hits.length ? Math.min(1, Math.max(...hits.map((h) => h[1])) / 25) : 0.5;
       if (kick) S.state.lastKick = t;
       S.state.kickHit = kick;
       if (kick && st !== 'drain') S.state.kicks++;
@@ -686,7 +663,6 @@ export const SLIDES = {
         // tension: nothing at the start, everything by 3:38
         const T = Math.pow(Math.max(0, Math.min(1, (pos - 20) / (P.drain - 20))), 1.35), i = +st.slice(1);
         S.state.T = T;
-        sp.warp = i >= 2 ? 0.04 + 0.55 * T * T : 0;
         S.q('.tension').style.opacity = (0.08 + T * 0.62) * (0.8 + A.bands.sLow * 0.4);
         // monuments come down on the beat, more and more of them; from the fourth part they put on gas masks
         if (kick && i >= 1 && t - (S.state.lastStamp || 0) > 1.2 - T * 0.9 && Math.random() < 0.35 + T * 0.6) { S.state.lastStamp = t; this.slam(S, [0, 1, 2, 3, 5][i]); }
@@ -697,17 +673,12 @@ export const SLIDES = {
         if (kick && i >= 2 && Math.random() < 0.25 + T * 0.7) this.censor(S, 1 + Math.floor(T * 3));
         // the clicks black out words, one at a time
         if (clicks.length && i >= 1 && t - (S.state.lastCensor || 0) > 0.22 - T * 0.12) { S.state.lastCensor = t; this.censor(S, 1, true); }
-        if (kick && T > 0.25) this.shake(S, 2 + T * 9, 80);
-        // the frame leans in on the beat, harder as the pressure builds
-        if (kick) S.el.animate([{ scale: 1 + 0.006 + hard * 0.01 + T * 0.03 }, { scale: 1 }], { duration: 260, easing: 'cubic-bezier(.23,1,.32,1)' });
         if (kick && T > 0.6 && Math.random() < T * 0.45) this.glitch(S, T);
-        title.style.translate = T > 0.45 ? `${(Math.random() - 0.5) * T * 4}px ${(Math.random() - 0.5) * T * 3}px` : '';
       } else if (st === 'drain' || st === 'end') {
         title.style.translate = '';
         if (st === 'drain') this.melt(S, pos - P.drain);
       } else if (kick && st === 'twist') {
         const k = ++S.state.tick;
-        S.q('#cv-spiral').style.rotate = `${-k * 11.25}deg`;       // the spiral ticks backwards like a broken clock
         S.q('.wedge').style.rotate = `${k * 22.5}deg`;            // the wedge sweeps round like its hand
         this.scramble(S);
         if (Math.random() < 0.5) this.slam(S, 1);
@@ -731,21 +702,19 @@ export const SLIDES = {
       S.el.style.translate = `${(Math.random() - 0.5) * amp}px ${(Math.random() - 0.5) * amp * 0.7}px`;
       S.later(ms, () => (S.el.style.translate = ''));
     };
-    // a split-second tear: the title and the spiral jump sideways
+    // a split-second tear: the title jumps sideways
     b.glitch = function (S, T) {
       const d = (Math.random() < 0.5 ? -1 : 1) * (10 + T * 26);
       S.q('.soviet').style.translate = `${d}px 0`;
-      S.q('#cv-spiral').style.translate = `${-d * 0.6}px ${d * 0.2}px`;
       S.q('.tension').style.opacity = 0.95;
-      S.later(70, () => { S.q('#cv-spiral').style.translate = ''; });
     };
     // what each part of the song looks like
     b.LOOKS = [
-      { wedge: 0, disc: false, rot: 0, play: C.me },
-      { wedge: -16, disc: false, rot: 0, play: C.me },
-      { wedge: -16, disc: true, rot: 0, play: '#EFECE6' },
-      { wedge: 24, disc: true, rot: -10, play: C.ember },
-      { wedge: 8, disc: true, rot: 6, play: C.me },
+      { wedge: 0, disc: false },
+      { wedge: -16, disc: false },
+      { wedge: -16, disc: true },
+      { wedge: 24, disc: true },
+      { wedge: 8, disc: true },
     ];
     // the venom reaches the text before it covers it: the letters run down in streaks and go the colour of blood
     b.MELT = '.soviet, .soviet + .cap, #spiral-meta, #spiral-text, #spiral-1953, #cv-116';
@@ -761,8 +730,8 @@ export const SLIDES = {
       S.state.melting = false;
       S.el.querySelectorAll(this.MELT).forEach((x) => (x.style.filter = ''));
     };
-    b.look = function (S, sp, st, prev) {
-      const el = S.el, wedge = S.q('.wedge'), cv = S.q('#cv-spiral');
+    b.look = function (S, st, prev) {
+      const el = S.el, wedge = S.q('.wedge');
       el.classList.remove('draining', 'flick');
       if (st !== 'drain' && S.state.melting) this.unmelt(S);
       // 3:58: the music falls away and everything with it, at once. Nothing is left but the dark (and, for a
@@ -772,12 +741,9 @@ export const SLIDES = {
       if (hush) { el.classList.remove('absurd', 'disc-on'); el.style.rotate = ''; el.style.translate = ''; S.q('.tension').style.opacity = 0; return; }
       if (st[0] === 's') {
         el.classList.remove('absurd');
-        sp.mode = 'normal'; sp.dim = 1;
         const L = this.LOOKS[+st.slice(1)];
         wedge.style.rotate = `${L.wedge}deg`;
-        cv.style.rotate = `${L.rot}deg`;
         el.classList.toggle('disc-on', L.disc);
-        sp.playColor = L.play;
         this.unscramble(S);
         if (prev && prev[0] !== 's') S.state.mon.reset();
         el.style.rotate = '';
@@ -788,11 +754,9 @@ export const SLIDES = {
         const wantM = [0, 0, 0, 10, 40][+st.slice(1)] - S.state.mon.masked;
         if (wantM > 0) S.later(700, () => S.state.mon.maskUp(wantM, performance.now() / 1000));
         if (prev) {
-          // a new part of the song is a hard cut: one black frame, then the camera pushes in
+          // a new part of the song is a hard cut: one black frame
           S.eng.thump({ gain: 0.22, f0: 70, f1: 40, decay: 0.6 });
           el.animate([{ filter: 'brightness(0)' }, { filter: 'brightness(0)', offset: 0.4 }, { filter: 'brightness(1.6)', offset: 0.55 }, { filter: 'none' }], { duration: 240, easing: 'linear' });
-          el.animate([{ scale: 1.09 }, { scale: 1 }], { duration: 900, easing: 'cubic-bezier(.16,1,.3,1)' });
-          this.shake(S, 10, 120);
         }
         return;
       }
@@ -801,19 +765,16 @@ export const SLIDES = {
         // everything stops: dark, the stamps fade back, only the clock is left clicking backwards
         el.classList.remove('absurd');
         el.classList.add('draining');
-        sp.mode = 'drain'; sp.dim = 0.2; sp.warp = 0;
         S.q('.tension').style.opacity = 0;
         return;
       }
       // 3:41 — the world turns over
-      sp.mode = st; sp.warp = 1; sp.playColor = C.me; sp.dim = 1;
       el.classList.remove('disc-on');
       S.q('.tension').style.opacity = 0;
       if (st === 'twist' && prev === 'drain') {
         // white, black, white — then it is the other world
         S.q('.strobe').animate([{ opacity: 1 }, { opacity: 1, offset: 0.12 }, { opacity: 0, offset: 0.13 }, { opacity: 0, offset: 0.25 }, { opacity: 1, offset: 0.26 }, { opacity: 1, offset: 0.36 }, { opacity: 0 }], { duration: 520, easing: 'linear' });
         S.later(62, () => el.classList.add('absurd'));
-        cv.animate([{ scale: 1.45 }, { scale: 1 }], { duration: 900, easing: 'cubic-bezier(.16,1,.3,1)' });
         S.eng.thump({ gain: 0.7, f0: 64, f1: 28, decay: 1.6 });
         S.eng.noiseHit({ f0: 6000, f1: 120, dur: 1.4, attack: 0.002, gain: 0.22, verb: 0.5 });
         
@@ -865,12 +826,45 @@ export const SLIDES = {
       S.el.style.translate = '';
       S.el.style.rotate = '';
       S.q('.wedge').style.rotate = '';
-      ['#cv-spiral', '.soviet'].forEach((q) => { S.q(q).style.rotate = ''; S.q(q).style.translate = ''; });
+      S.q('.soviet').style.rotate = ''; S.q('.soviet').style.translate = '';
       S.q('.tension').style.opacity = 0;
       this.unscramble(S);
     };
-    b.notes = '두 번째 곡 Прокофьев, 러시아 작곡가 프로코피예프 이름이에요. Floating Points가 오케스트라랑 전자음을 한 곡에 넣은 것처럼, 저는 클래식이랑 실험적인 전자음악을 섞어 봤어요. 좀 황당한 얘기가 하나 있는데, 프로코피예프는 1953년 3월 5일, 스탈린이랑 같은 날 죽었어요. 소련 음악 잡지가 그의 부고를 116쪽에 실었는데, 앞의 115쪽이 전부 스탈린이었어요. 아래 오선은 이 곡의 현악 4중주 악보예요. 음표가 빨간 선을 지나는 순간 그 소리가 나고, 현악이 쉬고 전자음만 나오는 구간에서는 그 자리에 스펙트럼이 흘러가요. 높은 클릭마다 홀에 하얀 섬광이 터지고, 피아노 음마다 조명이 건반처럼 왼쪽 오른쪽으로 움직여요. 곡이 갈수록 똑같은 기념비 흉상이 박자마다 떨어져서 지평선까지 줄을 서요. 시계는 점점 녹아내리고, 흉상들은 방독면을 쓰고, 왼쪽 글은 검열당한 것처럼 한 단어씩 까맣게 지워져요. 흉상들 사이에 서 있는 사람은 1918년의 프로코피예프 본인이에요. 계속 이쪽을 보고 있어요. 3분 38초에 소리가 빠지면 시계 뒤에서 검은 독이 번져 나와 홀을 삼키고, 왼쪽 글자까지 녹여 버려요. 시계만 거꾸로 째깍거리고요. 3분 41초에 곡이 뒤집히는 순간, 보스, 브뤼헐, 고야, 달리 같은 화가들의 기괴한 그림 백여 장이 한 번에 화면을 덮어요. 박자마다 화면이 새로 조각나고, 조각들은 세포처럼 갈라지고, 그림은 1초에도 몇 번씩 깨지면서 바뀌어요. 그리고 3분 58초, 소리가 꺼지는 순간 전부 한꺼번에 사라져요. 눈에 남은 잔상만 잠깐 보이다가, 끝까지 아무것도 없어요. 끝까지 들려주세요. (나선 바깥쪽 끝 부분을 누르면 바로 갈 수 있어요.)';
+    b.notes = '두 번째 곡 Прокофьев, 러시아 작곡가 프로코피예프 이름이에요. Floating Points가 오케스트라랑 전자음을 한 곡에 넣은 것처럼, 저는 클래식이랑 실험적인 전자음악을 섞어 봤어요. 좀 황당한 얘기가 하나 있는데, 프로코피예프는 1953년 3월 5일, 스탈린이랑 같은 날 죽었어요. 소련 음악 잡지가 그의 부고를 116쪽에 실었는데, 앞의 115쪽이 전부 스탈린이었어요. 아래 오선은 이 곡의 현악 4중주 악보예요. 음표가 빨간 선을 지나는 순간 그 소리가 나고, 현악이 쉬고 전자음만 나오는 구간에서는 그 자리에 스펙트럼이 흘러가요. 높은 클릭마다 홀에 하얀 섬광이 터지고, 피아노 음마다 조명이 건반처럼 왼쪽 오른쪽으로 움직여요. 곡이 갈수록 똑같은 기념비 흉상이 박자마다 떨어져서 지평선까지 줄을 서요. 시계는 점점 녹아내리고, 흉상들은 방독면을 쓰고, 왼쪽 글은 검열당한 것처럼 한 단어씩 까맣게 지워져요. 흉상들 사이에 서 있는 사람은 1918년의 프로코피예프 본인이에요. 계속 이쪽을 보고 있어요. 3분 38초에 소리가 빠지면 시계 뒤에서 검은 독이 번져 나와 홀을 삼키고, 왼쪽 글자까지 녹여 버려요. 시계만 거꾸로 째깍거리고요. 3분 41초에 곡이 뒤집히는 순간, 보스, 브뤼헐, 고야, 달리 같은 화가들의 기괴한 그림 백여 장이 한 번에 화면을 덮어요. 박자마다 화면이 새로 조각나고, 조각들은 세포처럼 갈라지고, 그림은 1초에도 몇 번씩 깨지면서 바뀌어요. 그리고 3분 58초, 소리가 꺼지는 순간 전부 한꺼번에 사라져요. 눈에 남은 잔상만 잠깐 보이다가, 끝까지 아무것도 없어요. 끝까지 들려주세요.';
     return b;
   })(),
 
+  coda: {
+    ownAudio: true,
+    notes: '(끝까지 말하지 않습니다. 선이 하나의 점이 되고, 마지막 문장이 나타난 뒤에도 몇 초 더 기다리세요. 스페이스를 누르면 마지막 소리를 다시 들을 수 있습니다.)',
+    enter(S) {
+      S.eng.setBed(null, 2);
+      const c = S.add(new Coda(S.q('#cv-coda')));
+      S.state.c = c; S.state.done = false;
+      const box = S.q('#coda-text');
+      box.innerHTML = '';
+      const say = (html, cls = 'd4') => {
+        box.querySelectorAll('p').forEach((p) => p.animate([{ opacity: 1 }, { opacity: 0, filter: 'blur(8px)' }], { duration: 1600, fill: 'forwards' }));
+        const p = mk('p', cls, 'position:absolute;left:0;right:0', t(html));
+        box.appendChild(p);
+        p.animate([{ opacity: 0, filter: 'blur(10px)' }, { opacity: 1, filter: 'none' }], { duration: 2400, easing: 'cubic-bezier(.23,1,.32,1)', fill: 'both' });
+      };
+      S.state.say = say;
+      [[3000, '영향은 모방이 아니다.'], [9000, '어느 날 내 소리 안에서'], [14000, '다른 누군가의 메아리를 듣게 되는 것.'], [21000, '그리고 이제, 여기에는 <span class="c-me">나의 메아리</span>도 있다.']].forEach(([ms, h]) => S.later(ms, () => say(h)));
+      S.later(2000, () => S.eng.setBed({ id: 'sub', gain: 1, restart: true, loop: false }, 1.5));
+    },
+    frame(S) {
+      const c = S.state.c, dur = S.eng.buffers.sub ? S.eng.buffers.sub.duration : 34;
+      c.k = clamp((S.t - 4) / 10);
+      if (!S.state.done && S.t > 2 + dur + 0.6) {
+        S.state.done = true; S.state.tEnd = S.t;
+        S.later(4500, () => S.state.say('어떤 소리는 끝난 뒤에야 비로소 시작된다.', 'd5'));
+      }
+      if (S.state.done) c.dot = clamp((S.t - S.state.tEnd) / 5);
+    },
+    key(S, e) {
+      if (e.key === ' ' && S.state.done) { const d = S.eng.buffers.sub.duration; S.eng.setBed({ id: 'sub', offset: Math.max(0, d - 7), gain: 1, restart: true, loop: false }, 0.6); return true; }
+      return e.key === ' ';
+    },
+  },
 };

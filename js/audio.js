@@ -20,18 +20,44 @@ function makeIR(ctx, seconds, decay) {
   return buf;
 }
 
-// Every source is brought to the same average level (-18 dB RMS) so slides don't jump in volume.
-// The boost is capped so peaks land at most ~3 dB into the limiter, and never more than +18 dB.
-const TARGET_DB = -18;
-function loudnessGain(buf) {
-  let ss = 0, pk = 0, n = 0;
-  for (let c = 0; c < buf.numberOfChannels; c++) {
-    const d = buf.getChannelData(c);
-    for (let i = 0; i < d.length; i += 9) { const v = d[i]; ss += v * v; n++; if (Math.abs(v) > pk) pk = Math.abs(v); }
+// Loudness as the ear hears it (ITU-R BS.1770: K-weighted, gated), in LUFS, and the sample peak in dBFS.
+// The K filter is a high shelf (+4 dB above ~1.7 kHz, where the ear is most sensitive) and a 38 Hz high-pass; the
+// gating leaves out silence and the quiet stretches, so a long soft intro does not make a track look quiet.
+function biquad(d, b0, b1, b2, a1, a2) {
+  let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+  for (let i = 0; i < d.length; i++) {
+    const x = d[i], y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+    x2 = x1; x1 = x; y2 = y1; y1 = y; d[i] = y;
   }
-  const rmsDb = 10 * Math.log10(ss / n + 1e-12), pkDb = 20 * Math.log10(pk + 1e-9);
-  const db = Math.min(TARGET_DB - rmsDb, 2 - pkDb, 18);
-  return Math.pow(10, db / 20);
+}
+export function measure(buf) {
+  const fs = buf.sampleRate, seg = Math.round(fs * 0.1), nSeg = Math.floor(buf.length / seg), ms = new Float64Array(nSeg);
+  let pk = 0;
+  for (let c = 0; c < buf.numberOfChannels; c++) {
+    const src = buf.getChannelData(c), d = Float32Array.from(src);
+    for (let i = 0; i < src.length; i++) { const v = Math.abs(src[i]); if (v > pk) pk = v; }
+    let K = Math.tan(Math.PI * 1681.974450955533 / fs), Q = 0.7071752369554196;
+    const Vh = Math.pow(10, 3.999843853973347 / 20), Vb = Math.pow(Vh, 0.4996667741545416);
+    let a0 = 1 + K / Q + K * K;
+    biquad(d, (Vh + Vb * K / Q + K * K) / a0, 2 * (K * K - Vh) / a0, (Vh - Vb * K / Q + K * K) / a0, 2 * (K * K - 1) / a0, (1 - K / Q + K * K) / a0);
+    K = Math.tan(Math.PI * 38.13547087602444 / fs); Q = 0.5003270373238773; a0 = 1 + K / Q + K * K;
+    biquad(d, 1, -2, 1, 2 * (K * K - 1) / a0, (1 - K / Q + K * K) / a0);
+    for (let s = 0; s < nSeg; s++) { let e = 0; for (let i = s * seg, j = i + seg; i < j; i++) e += d[i] * d[i]; ms[s] += e / seg; }
+  }
+  // 400 ms blocks, 75 % overlap
+  const blocks = [];
+  for (let s = 0; s + 4 <= nSeg; s++) blocks.push((ms[s] + ms[s + 1] + ms[s + 2] + ms[s + 3]) / 4);
+  const L = (z) => -0.691 + 10 * Math.log10(z + 1e-12), mean = (a) => a.reduce((x, y) => x + y, 0) / Math.max(1, a.length);
+  const abs = blocks.filter((z) => L(z) > -70), rel = L(mean(abs)) - 10;
+  return { lufs: L(mean(abs.filter((z) => L(z) > rel))), peak: 20 * Math.log10(pk + 1e-9) };
+}
+// Every source is brought to the same loudness, so no page is louder or quieter than another because of how its track
+// was mastered; the pages' own levels (their bed gain) then mean the same thing everywhere. A boost is capped so the
+// peaks reach at most 1 dB into the limiter.
+const TARGET_LUFS = -18, PEAK_ROOM = 1;
+function loudnessGain(buf) {
+  const m = measure(buf);
+  return Math.pow(10, Math.min(TARGET_LUFS - m.lufs, PEAK_ROOM - m.peak) / 20);
 }
 
 export class Engine {
